@@ -1,0 +1,11 @@
+ROADMAP.md
+AGENTS.md
+.gitmessage
+.github/PULL_REQUEST_TEMPLATE.md
+.github/workflows/history-integrity.yml
+docs/COMMIT_SCHEDULE.md
+docs/GPG_SIGNING.md
+docs/commit-calendar.tsv
+scripts/git/
+scripts/github/configure-repository.sh
+security/signing-key.asc
