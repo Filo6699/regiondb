@@ -9,3 +9,7 @@ docs/commit-calendar.tsv
 scripts/git/
 scripts/github/configure-repository.sh
 security/signing-key.asc
+.tools/
+bin/
+coverage.out
+*.test
