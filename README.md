@@ -10,7 +10,8 @@ prints its development version and exits:
 regiondb dev
 ```
 
-Storage, networking, and protocol behavior are not implemented yet.
+The packed chunk core and `fs_split_v1` storage are available as internal Go
+APIs. Networking and protocol behavior are not implemented yet.
 
 ## Development
 
