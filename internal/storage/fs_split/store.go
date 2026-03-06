@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 
 	"github.com/Filo6699/regiondb/internal/bitcodec"
 	"github.com/Filo6699/regiondb/internal/geometry"
@@ -29,6 +30,7 @@ var (
 type Store struct {
 	root     string
 	geometry geometry.Geometry
+	mu       sync.RWMutex
 }
 
 func Open(root string, g geometry.Geometry) (*Store, error) {
@@ -50,6 +52,9 @@ func Open(root string, g geometry.Geometry) (*Store, error) {
 }
 
 func (s *Store) WriteChunk(coord geometry.Coord, chunk *storage.Chunk) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if chunk == nil {
 		return errors.New("write chunk: nil chunk")
 	}
@@ -70,6 +75,9 @@ func (s *Store) WriteChunk(coord geometry.Coord, chunk *storage.Chunk) error {
 }
 
 func (s *Store) ReadChunk(coord geometry.Coord) (chunk *storage.Chunk, returnErr error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	path := s.chunkPath(coord)
 	file, err := os.Open(path)
 	if err != nil {
