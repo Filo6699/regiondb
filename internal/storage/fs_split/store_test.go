@@ -2,8 +2,10 @@ package fs_split
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/Filo6699/regiondb/internal/geometry"
@@ -135,6 +137,80 @@ func TestOpenRejectsInvalidGeometry(t *testing.T) {
 		ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 1,
 	})); err == nil {
 		t.Fatal("Open(empty root) succeeded")
+	}
+}
+
+func TestStoreConcurrentReadsAndWrites(t *testing.T) {
+	t.Parallel()
+
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 2, LargeChunkEdge: 2, BlockBits: 2})
+	store := mustOpen(t, t.TempDir(), g)
+	coord := geometry.Coord{X: -3, Y: 5}
+	chunks := []*storage.Chunk{mustChunk(t, g), mustChunk(t, g)}
+	for index, chunk := range chunks {
+		if err := chunk.Set(geometry.Offset{}, uint64(index+1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.WriteChunk(coord, chunks[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		writerCount = 4
+		readerCount = 6
+		iterations  = 50
+	)
+	start := make(chan struct{})
+	results := make(chan error, writerCount+readerCount)
+	var workers sync.WaitGroup
+	workers.Add(writerCount + readerCount)
+
+	for writer := 0; writer < writerCount; writer++ {
+		go func(writer int) {
+			defer workers.Done()
+			<-start
+			for iteration := 0; iteration < iterations; iteration++ {
+				chunk := chunks[(writer+iteration)%len(chunks)]
+				if err := store.WriteChunk(coord, chunk); err != nil {
+					results <- fmt.Errorf("writer %d: %w", writer, err)
+					return
+				}
+			}
+			results <- nil
+		}(writer)
+	}
+	for reader := 0; reader < readerCount; reader++ {
+		go func(reader int) {
+			defer workers.Done()
+			<-start
+			for iteration := 0; iteration < iterations; iteration++ {
+				chunk, err := store.ReadChunk(coord)
+				if err != nil {
+					results <- fmt.Errorf("reader %d: %w", reader, err)
+					return
+				}
+				value, err := chunk.Get(geometry.Offset{})
+				if err != nil {
+					results <- fmt.Errorf("reader %d: read value: %w", reader, err)
+					return
+				}
+				if value != 1 && value != 2 {
+					results <- fmt.Errorf("reader %d: value = %d, want 1 or 2", reader, value)
+					return
+				}
+			}
+			results <- nil
+		}(reader)
+	}
+
+	close(start)
+	workers.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
+			t.Error(err)
+		}
 	}
 }
 
