@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"sync"
 
 	"github.com/Filo6699/regiondb/internal/bitcodec"
 	"github.com/Filo6699/regiondb/internal/geometry"
@@ -21,6 +22,7 @@ type Engine struct {
 	geometry geometry.Geometry
 	store    ChunkStore
 	token    string
+	mu       sync.RWMutex
 }
 
 type Session struct {
@@ -132,6 +134,8 @@ func (s *Session) get(args []string) Response {
 	if response != nil {
 		return *response
 	}
+	s.engine.mu.RLock()
+	defer s.engine.mu.RUnlock()
 	value, response := s.readBlock(block)
 	if response != nil {
 		return *response
@@ -155,6 +159,8 @@ func (s *Session) set(args []string) Response {
 		return errorResponse("BIT_VALUE", "value exceeds configured block width")
 	}
 
+	s.engine.mu.Lock()
+	defer s.engine.mu.Unlock()
 	mapping := s.engine.geometry.BlockToChunk(block)
 	chunk, found, err := s.readChunk(mapping.Chunk)
 	if err != nil {
@@ -186,6 +192,8 @@ func (s *Session) exists(args []string) Response {
 	if response != nil {
 		return *response
 	}
+	s.engine.mu.RLock()
+	defer s.engine.mu.RUnlock()
 	value, response := s.readBlock(block)
 	if response != nil {
 		return *response
@@ -204,6 +212,8 @@ func (s *Session) chunk(args []string) Response {
 	if response != nil {
 		return *response
 	}
+	s.engine.mu.RLock()
+	defer s.engine.mu.RUnlock()
 	chunk, found, err := s.readChunk(coord)
 	if err != nil {
 		return errorResponse("STORAGE", "read failed")
@@ -237,6 +247,8 @@ func (s *Session) chunkSet(args []string) Response {
 	if err != nil {
 		return errorResponse("PAYLOAD", "packed chunk is invalid")
 	}
+	s.engine.mu.Lock()
+	defer s.engine.mu.Unlock()
 	if err := s.engine.store.WriteChunk(coord, chunk); err != nil {
 		return errorResponse("STORAGE", "write failed")
 	}
