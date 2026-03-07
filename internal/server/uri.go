@@ -12,6 +12,7 @@ import (
 type Endpoint struct {
 	Token   string
 	Address string
+	TLS     bool
 }
 
 func ParseURI(raw string) (Endpoint, error) {
@@ -19,8 +20,8 @@ func ParseURI(raw string) (Endpoint, error) {
 	if err != nil {
 		return Endpoint{}, fmt.Errorf("parse region URI: %w", err)
 	}
-	if parsed.Scheme != "region" {
-		return Endpoint{}, errors.New("parse region URI: scheme must be region")
+	if parsed.Scheme != "region" && parsed.Scheme != "regions" {
+		return Endpoint{}, errors.New("parse region URI: scheme must be region or regions")
 	}
 	if parsed.Opaque != "" || parsed.Path != "/" || parsed.RawQuery != "" ||
 		parsed.ForceQuery || parsed.Fragment != "" {
@@ -53,7 +54,11 @@ func ParseURI(raw string) (Endpoint, error) {
 		return Endpoint{}, errors.New("parse region URI: port must be between 1 and 65535")
 	}
 
-	return Endpoint{Token: token, Address: net.JoinHostPort(host, port)}, nil
+	return Endpoint{
+		Token:   token,
+		Address: net.JoinHostPort(host, port),
+		TLS:     parsed.Scheme == "regions",
+	}, nil
 }
 
 func validateToken(token string) error {

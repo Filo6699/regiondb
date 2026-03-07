@@ -3,15 +3,48 @@
 `regiondb` is a Go project for storing chunk and grid data for games and
 grid-based simulations.
 
-The project is currently a repository scaffold. The `regiondb` executable
-prints its development version and exits:
+The current development version provides a packed chunk store backed by the
+`fs_split_v1` on-disk format and an authenticated text protocol over TCP or
+TLS.
 
-```text
-regiondb dev
+## Running the server
+
+All geometry and authentication settings are explicit:
+
+```sh
+go run ./cmd/regiondb \
+  -listen 127.0.0.1:8123 \
+  -data-dir ./data \
+  -token development-secret \
+  -chunk-edge 16 \
+  -large-chunk-edge 8 \
+  -block-bits 5
 ```
 
-The packed chunk core and `fs_split_v1` storage are available as internal Go
-APIs. Networking and protocol behavior are not implemented yet.
+To enable TLS, provide both files from a PEM certificate/key pair:
+
+```sh
+go run ./cmd/regiondb \
+  -listen 127.0.0.1:8123 \
+  -data-dir ./data \
+  -token development-secret \
+  -chunk-edge 16 \
+  -large-chunk-edge 8 \
+  -block-bits 5 \
+  -tls-cert ./server.crt \
+  -tls-key ./server.key
+```
+
+The server rejects an incomplete or invalid TLS configuration before opening
+the data directory or listener. TLS listeners require TLS 1.2 or later.
+Connection URIs use `region://token@host:port/` for plaintext TCP and
+`regions://token@host:port/` for TLS.
+
+The current contracts are documented in:
+
+- [Protocol specification](docs/PROTOCOL.md)
+- [Storage format](docs/STORAGE_FORMAT.md)
+- [Concurrency model](docs/CONCURRENCY.md)
 
 ## Development
 

@@ -3,8 +3,25 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"io"
+	"math/big"
+	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/Filo6699/regiondb/internal/geometry"
+	"github.com/Filo6699/regiondb/internal/protocol"
+	"github.com/Filo6699/regiondb/internal/server"
+	"github.com/Filo6699/regiondb/internal/storage/fs_split"
 )
 
 func TestPrintVersion(t *testing.T) {
@@ -64,6 +81,143 @@ func TestParseConfigRejectsMissingRuntimeFlags(t *testing.T) {
 			t.Fatalf("parseConfig(%q) succeeded", args)
 		}
 	}
+}
+
+func TestParseConfigRejectsIncompleteTLS(t *testing.T) {
+	t.Parallel()
+
+	base := []string{
+		"-listen", "127.0.0.1:0",
+		"-data-dir", "data",
+		"-token", "secret",
+		"-chunk-edge", "1",
+		"-large-chunk-edge", "1",
+		"-block-bits", "1",
+	}
+	for _, tlsFlag := range []string{"-tls-cert", "-tls-key"} {
+		args := append(append([]string(nil), base...), tlsFlag, "server.pem")
+		if _, err := parseConfig(args, ioDiscard{}); err == nil {
+			t.Fatalf("parseConfig(%q) succeeded", args)
+		}
+	}
+}
+
+func TestTLSStartupSmoke(t *testing.T) {
+	certificatePath, keyPath := writeTestCertificate(t)
+	tlsConfig, err := loadTLSConfig(config{tlsCert: certificatePath, tlsKey: keyPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener = tls.NewListener(listener, tlsConfig)
+
+	g, err := geometry.New(geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := fs_split.Open(t.TempDir(), g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := protocol.NewEngine(g, store, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- server.Serve(ctx, listener, engine)
+	}()
+
+	connection, err := tls.Dial("tcp", listener.Addr().String(), &tls.Config{
+		InsecureSkipVerify: true, // The generated certificate is scoped to this test.
+		MinVersion:         tls.VersionTLS12,
+	})
+	if err != nil {
+		cancel()
+		<-result
+		t.Fatalf("TLS dial failed: %v", err)
+	}
+	if _, err := connection.Write([]byte("AUTH secret\r\nPING\r\n")); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	response := make([]byte, len("+OK\r\n+OK PONG\r\n"))
+	if _, err := io.ReadFull(connection, response); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	if got, want := string(response), "+OK\r\n+OK PONG\r\n"; got != want {
+		cancel()
+		t.Fatalf("response = %q, want %q", got, want)
+	}
+	if err := connection.Close(); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	cancel()
+	if err := <-result; err != nil {
+		t.Fatalf("run() error = %v", err)
+	}
+}
+
+func TestRunRejectsInvalidTLSBeforeOpeningStore(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "data")
+	err := run(context.Background(), []string{
+		"-listen", "127.0.0.1:0",
+		"-data-dir", dataDir,
+		"-token", "secret",
+		"-chunk-edge", "1",
+		"-large-chunk-edge", "1",
+		"-block-bits", "1",
+		"-tls-cert", filepath.Join(t.TempDir(), "missing.crt"),
+		"-tls-key", filepath.Join(t.TempDir(), "missing.key"),
+	}, ioDiscard{}, ioDiscard{})
+	if err == nil {
+		t.Fatal("run() succeeded with missing TLS files")
+	}
+	if _, statErr := os.Stat(dataDir); !os.IsNotExist(statErr) {
+		t.Fatalf("data directory was opened before TLS validation: %v", statErr)
+	}
+}
+
+func writeTestCertificate(t *testing.T) (string, string) {
+	t.Helper()
+
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "localhost"},
+		NotBefore:    time.Unix(0, 0),
+		NotAfter:     time.Unix(1<<31, 0),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, publicKey, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	certificatePath := filepath.Join(directory, "server.crt")
+	keyPath := filepath.Join(directory, "server.key")
+	if err := os.WriteFile(certificatePath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return certificatePath, keyPath
 }
 
 func TestRunVersion(t *testing.T) {
