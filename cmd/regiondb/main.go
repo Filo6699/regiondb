@@ -39,6 +39,7 @@ type config struct {
 	durability        fs_split.DurabilityMode
 	checkpointRecords uint64
 	checkpointBytes   int64
+	maxLoadedChunks   int
 	geometry          geometry.Config
 	version           bool
 }
@@ -65,6 +66,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnEr
 		Durability:        config.durability,
 		CheckpointRecords: config.checkpointRecords,
 		CheckpointBytes:   config.checkpointBytes,
+		MaxLoadedChunks:   config.maxLoadedChunks,
 	})
 	if err != nil {
 		return fmt.Errorf("open chunk store: %w", err)
@@ -122,6 +124,7 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	flags.StringVar(&durability, "durability", string(fs_split.DurabilityRelaxed), "durability mode: relaxed, fsync-wal, or fsync-checkpoint")
 	flags.Uint64Var(&result.checkpointRecords, "checkpoint-records", fs_split.DefaultCheckpointRecords, "WAL records between checkpoints")
 	flags.Int64Var(&result.checkpointBytes, "checkpoint-bytes", fs_split.DefaultCheckpointBytes, "WAL bytes between checkpoints")
+	flags.IntVar(&result.maxLoadedChunks, "max-loaded-chunks", fs_split.DefaultMaxLoadedChunks, "maximum chunks retained in memory")
 	flags.Uint64Var(&chunkEdge, "chunk-edge", 0, "blocks per chunk edge")
 	flags.Uint64Var(&largeChunkEdge, "large-chunk-edge", 0, "chunks per large-chunk edge")
 	flags.Uint64Var(&blockBits, "block-bits", 0, "bits per block")
@@ -158,6 +161,9 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	}
 	if result.checkpointBytes <= 0 {
 		return config{}, errors.New("-checkpoint-bytes must be positive")
+	}
+	if result.maxLoadedChunks <= 0 {
+		return config{}, errors.New("-max-loaded-chunks must be positive")
 	}
 	if chunkEdge > math.MaxUint32 || largeChunkEdge > math.MaxUint32 || blockBits > math.MaxUint8 {
 		return config{}, errors.New("geometry flag value is out of range")

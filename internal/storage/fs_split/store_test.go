@@ -33,6 +33,7 @@ func TestStoreReopenRoundTrip(t *testing.T) {
 	if err := store.WriteChunk(coord, chunk); err != nil {
 		t.Fatalf("WriteChunk(): %v", err)
 	}
+	closeStore(t, store)
 
 	reopened := mustOpen(t, root, g)
 	gotChunk, err := reopened.ReadChunk(coord)
@@ -67,9 +68,12 @@ func TestStoreRejectsCorruption(t *testing.T) {
 
 	root := t.TempDir()
 	g := mustGeometry(t, geometry.Config{ChunkEdge: 2, LargeChunkEdge: 2, BlockBits: 7})
-	store := mustOpen(t, root, g)
+	store := mustOpenWithOptions(t, root, g, Options{MaxLoadedChunks: 1})
 	coord := geometry.Coord{X: -1, Y: -1}
 	if err := store.WriteChunk(coord, mustChunk(t, g)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteChunk(geometry.Coord{X: 8, Y: 8}, mustChunk(t, g)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -92,9 +96,12 @@ func TestStoreRejectsTruncatedFile(t *testing.T) {
 
 	root := t.TempDir()
 	g := mustGeometry(t, geometry.Config{ChunkEdge: 2, LargeChunkEdge: 2, BlockBits: 1})
-	store := mustOpen(t, root, g)
+	store := mustOpenWithOptions(t, root, g, Options{MaxLoadedChunks: 1})
 	coord := geometry.Coord{X: 1, Y: 2}
 	if err := store.WriteChunk(coord, mustChunk(t, g)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteChunk(geometry.Coord{X: 8, Y: 8}, mustChunk(t, g)); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Truncate(store.chunkPath(coord), headerBytes); err != nil {
@@ -397,11 +404,106 @@ func TestOpenRejectsInvalidOptions(t *testing.T) {
 	for _, options := range []Options{
 		{Durability: "unknown"},
 		{CheckpointBytes: -1},
+		{MaxLoadedChunks: -1},
 	} {
 		if _, err := OpenWithOptions(t.TempDir(), g, options); err == nil {
 			t.Fatalf("OpenWithOptions(%+v) succeeded", options)
 		}
 	}
+}
+
+func TestStoreEvictsAndReloadsChunks(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 2, BlockBits: 3})
+	store := mustOpenWithOptions(t, root, g, Options{MaxLoadedChunks: 1})
+	coords := []geometry.Coord{{X: 1, Y: 1}, {X: 2, Y: 2}}
+	for index, coord := range coords {
+		chunk := mustChunk(t, g)
+		if err := chunk.Set(geometry.Offset{}, uint64(index+1)); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.WriteChunk(coord, chunk); err != nil {
+			t.Fatalf("WriteChunk(%v): %v", coord, err)
+		}
+	}
+
+	store.cache.mu.Lock()
+	_, firstLoaded := store.cache.entries[coords[0]]
+	loaded := len(store.cache.entries)
+	store.cache.mu.Unlock()
+	if firstLoaded || loaded != 1 {
+		t.Fatalf("cache after eviction: first loaded = %t, size = %d", firstLoaded, loaded)
+	}
+
+	reloaded, err := store.ReadChunk(coords[0])
+	if err != nil {
+		t.Fatalf("ReadChunk(evicted): %v", err)
+	}
+	value, err := reloaded.Get(geometry.Offset{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != 1 {
+		t.Fatalf("reloaded value = %d, want 1", value)
+	}
+	store.cache.mu.Lock()
+	_, firstLoaded = store.cache.entries[coords[0]]
+	_, secondLoaded := store.cache.entries[coords[1]]
+	loaded = len(store.cache.entries)
+	store.cache.mu.Unlock()
+	if !firstLoaded || secondLoaded || loaded != 1 {
+		t.Fatalf("cache after reload: first = %t, second = %t, size = %d", firstLoaded, secondLoaded, loaded)
+	}
+}
+
+func TestStoreCacheReturnsIndependentChunks(t *testing.T) {
+	t.Parallel()
+
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 2})
+	store := mustOpenWithOptions(t, t.TempDir(), g, Options{MaxLoadedChunks: 1})
+	coord := geometry.Coord{}
+	chunk := mustChunk(t, g)
+	if err := chunk.Set(geometry.Offset{}, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteChunk(coord, chunk); err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.ReadChunk(coord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Set(geometry.Offset{}, 2); err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.ReadChunk(coord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := second.Get(geometry.Offset{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != 1 {
+		t.Fatalf("cached value changed through returned chunk: got %d, want 1", value)
+	}
+}
+
+func TestStoreRejectsSecondWriter(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 1})
+	first := mustOpen(t, root, g)
+	if _, err := Open(root, g); !errors.Is(err, ErrWriterLocked) {
+		t.Fatalf("second Open() error = %v, want ErrWriterLocked", err)
+	}
+	closeStore(t, first)
+
+	second := mustOpen(t, root, g)
+	closeStore(t, second)
 }
 
 func TestClosedStoreRejectsOperations(t *testing.T) {
@@ -438,6 +540,9 @@ func mustOpenWithOptions(t *testing.T, root string, g geometry.Geometry, options
 	if err != nil {
 		t.Fatalf("OpenWithOptions(): %v", err)
 	}
+	t.Cleanup(func() {
+		closeStore(t, store)
+	})
 	return store
 }
 
@@ -454,6 +559,9 @@ func mustOpen(t *testing.T, root string, g geometry.Geometry) *Store {
 	if err != nil {
 		t.Fatalf("Open(): %v", err)
 	}
+	t.Cleanup(func() {
+		closeStore(t, store)
+	})
 	return store
 }
 

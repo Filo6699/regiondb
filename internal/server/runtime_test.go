@@ -23,6 +23,11 @@ func TestServeLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close(): %v", err)
+		}
+	})
 	engine, err := protocol.NewEngine(g, store, "secret")
 	if err != nil {
 		t.Fatal(err)
@@ -93,6 +98,11 @@ func TestServeCancellationClosesIdleConnections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close(): %v", err)
+		}
+	})
 	engine, err := protocol.NewEngine(g, store, "secret")
 	if err != nil {
 		t.Fatal(err)

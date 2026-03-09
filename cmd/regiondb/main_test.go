@@ -60,7 +60,8 @@ func TestParseConfig(t *testing.T) {
 	}
 	if got.durability != fs_split.DurabilityRelaxed ||
 		got.checkpointRecords != fs_split.DefaultCheckpointRecords ||
-		got.checkpointBytes != fs_split.DefaultCheckpointBytes {
+		got.checkpointBytes != fs_split.DefaultCheckpointBytes ||
+		got.maxLoadedChunks != fs_split.DefaultMaxLoadedChunks {
 		t.Fatalf("parseConfig() storage options = %+v", got)
 	}
 }
@@ -122,13 +123,15 @@ func TestParseConfigStorageOptions(t *testing.T) {
 		"-durability", "fsync-wal",
 		"-checkpoint-records", "7",
 		"-checkpoint-bytes", "4096",
+		"-max-loaded-chunks", "3",
 	)
 	got, err := parseConfig(args, ioDiscard{})
 	if err != nil {
 		t.Fatalf("parseConfig() error = %v", err)
 	}
 	if got.durability != fs_split.DurabilityFsyncWAL ||
-		got.checkpointRecords != 7 || got.checkpointBytes != 4096 {
+		got.checkpointRecords != 7 || got.checkpointBytes != 4096 ||
+		got.maxLoadedChunks != 3 {
 		t.Fatalf("parseConfig() storage options = %+v", got)
 	}
 
@@ -136,6 +139,7 @@ func TestParseConfigStorageOptions(t *testing.T) {
 		{"-durability", "unknown"},
 		{"-checkpoint-records", "0"},
 		{"-checkpoint-bytes", "0"},
+		{"-max-loaded-chunks", "0"},
 	} {
 		if _, err := parseConfig(append(append([]string(nil), base...), invalid...), ioDiscard{}); err == nil {
 			t.Fatalf("parseConfig(%q) succeeded", invalid)
@@ -163,6 +167,11 @@ func TestTLSStartupSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close(): %v", err)
+		}
+	})
 	engine, err := protocol.NewEngine(g, store, "secret")
 	if err != nil {
 		t.Fatal(err)

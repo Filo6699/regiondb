@@ -8,6 +8,7 @@ import (
 const (
 	DefaultCheckpointRecords = 1024
 	DefaultCheckpointBytes   = 64 << 20
+	DefaultMaxLoadedChunks   = 1024
 )
 
 type DurabilityMode string
@@ -22,6 +23,7 @@ type Options struct {
 	Durability        DurabilityMode
 	CheckpointRecords uint64
 	CheckpointBytes   int64
+	MaxLoadedChunks   int
 }
 
 func (options Options) validated() (Options, error) {
@@ -41,6 +43,12 @@ func (options Options) validated() (Options, error) {
 	}
 	if options.CheckpointBytes < 0 {
 		return Options{}, errors.New("checkpoint byte threshold must be positive")
+	}
+	if options.MaxLoadedChunks == 0 {
+		options.MaxLoadedChunks = DefaultMaxLoadedChunks
+	}
+	if options.MaxLoadedChunks < 0 {
+		return Options{}, errors.New("maximum loaded chunks must be positive")
 	}
 	return options, nil
 }

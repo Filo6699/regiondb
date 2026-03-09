@@ -97,3 +97,7 @@ before truncating and synchronizing the WAL.
 These modes describe single-host filesystem calls. Hardware and filesystem
 behavior can impose weaker guarantees. There is no tombstone or alternate
 backend compatibility contract.
+
+Decoded chunks are retained in a bounded in-memory LRU cache. Eviction changes
+only memory use: a later read reloads and validates the chunk file. Cache state
+is neither stored in the data directory nor part of the on-disk format.

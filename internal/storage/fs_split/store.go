@@ -32,6 +32,8 @@ type Store struct {
 	geometry   geometry.Geometry
 	options    Options
 	wal        *os.File
+	writerLock *writerLock
+	cache      *chunkCache
 	walRecords uint64
 	walBytes   int64
 	mu         sync.RWMutex
@@ -60,6 +62,18 @@ func OpenWithOptions(root string, g geometry.Geometry, options Options) (_ *Stor
 	if err != nil {
 		return nil, fmt.Errorf("open fs_split_v1: %w", err)
 	}
+	lock, err := acquireWriterLock(filepath.Join(absoluteRoot, lockName))
+	if err != nil {
+		return nil, fmt.Errorf("open fs_split_v1: %w", err)
+	}
+	defer func() {
+		if returnErr != nil {
+			if err := lock.release(); err != nil {
+				returnErr = errors.Join(returnErr, fmt.Errorf("release writer lock: %w", err))
+			}
+		}
+	}()
+
 	wal, err := os.OpenFile(filepath.Join(absoluteRoot, walName), os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open WAL: %w", err)
@@ -73,10 +87,12 @@ func OpenWithOptions(root string, g geometry.Geometry, options Options) (_ *Stor
 	}()
 
 	store := &Store{
-		root:     absoluteRoot,
-		geometry: g,
-		options:  options,
-		wal:      wal,
+		root:       absoluteRoot,
+		geometry:   g,
+		options:    options,
+		wal:        wal,
+		writerLock: lock,
+		cache:      newChunkCache(g, options.MaxLoadedChunks),
 	}
 	if err := store.recoverWAL(); err != nil {
 		return nil, err
@@ -88,14 +104,23 @@ func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.wal == nil {
+	if s.wal == nil && s.writerLock == nil {
 		return nil
 	}
-	if err := s.wal.Close(); err != nil {
-		return fmt.Errorf("close WAL: %w", err)
+	var result error
+	if s.wal != nil {
+		if err := s.wal.Close(); err != nil {
+			result = errors.Join(result, fmt.Errorf("close WAL: %w", err))
+		}
+		s.wal = nil
 	}
-	s.wal = nil
-	return nil
+	if s.writerLock != nil {
+		if err := s.writerLock.release(); err != nil {
+			result = errors.Join(result, fmt.Errorf("release writer lock: %w", err))
+		}
+		s.writerLock = nil
+	}
+	return result
 }
 
 func (s *Store) WriteChunk(coord geometry.Coord, chunk *storage.Chunk) error {
@@ -128,6 +153,9 @@ func (s *Store) WriteChunk(coord geometry.Coord, chunk *storage.Chunk) error {
 			return err
 		}
 	}
+	if err := s.cache.put(coord, payload); err != nil {
+		return fmt.Errorf("cache written chunk: %w", err)
+	}
 	return nil
 }
 
@@ -137,6 +165,12 @@ func (s *Store) ReadChunk(coord geometry.Coord) (chunk *storage.Chunk, returnErr
 
 	if s.wal == nil {
 		return nil, errors.New("read chunk: store is closed")
+	}
+	if chunk, found, err := s.cache.get(coord); found || err != nil {
+		if err != nil {
+			return nil, fmt.Errorf("read cached chunk: %w", err)
+		}
+		return chunk, nil
 	}
 	path := s.chunkPath(coord)
 	file, err := os.Open(path)
@@ -170,6 +204,9 @@ func (s *Store) ReadChunk(coord geometry.Coord) (chunk *storage.Chunk, returnErr
 	chunk, err = storage.ChunkFromBytes(s.geometry, payload)
 	if err != nil {
 		return nil, fmt.Errorf("%w: decode payload: %v", ErrCorrupt, err)
+	}
+	if err := s.cache.put(coord, payload); err != nil {
+		return nil, fmt.Errorf("cache read chunk: %w", err)
 	}
 	return chunk, nil
 }
