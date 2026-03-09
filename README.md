@@ -18,8 +18,14 @@ go run ./cmd/regiondb \
   -token development-secret \
   -chunk-edge 16 \
   -large-chunk-edge 8 \
-  -block-bits 5
+  -block-bits 5 \
+  -durability fsync-wal
 ```
+
+Storage defaults to `relaxed` durability. Operators can select `fsync-wal` or
+`fsync-checkpoint` and tune WAL checkpoint thresholds with
+`-checkpoint-records` and `-checkpoint-bytes`. The exact acknowledgement
+boundaries are defined in the storage format specification.
 
 To enable TLS, provide both files from a PEM certificate/key pair:
 

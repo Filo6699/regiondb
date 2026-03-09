@@ -110,20 +110,27 @@ func TestStoreRejectsGeometryMismatch(t *testing.T) {
 
 	root := t.TempDir()
 	firstGeometry := mustGeometry(t, geometry.Config{ChunkEdge: 2, LargeChunkEdge: 2, BlockBits: 3})
-	firstStore := mustOpen(t, root, firstGeometry)
+	firstStore := mustOpenWithOptions(t, root, firstGeometry, Options{
+		CheckpointRecords: 1,
+		CheckpointBytes:   1 << 20,
+	})
 	coord := geometry.Coord{X: 3, Y: 4}
 	if err := firstStore.WriteChunk(coord, mustChunk(t, firstGeometry)); err != nil {
 		t.Fatal(err)
 	}
+	if err := firstStore.WriteChunk(coord, mustChunk(t, mustGeometry(t, geometry.Config{
+		ChunkEdge: 2, LargeChunkEdge: 2, BlockBits: 4,
+	}))); !errors.Is(err, ErrGeometryMismatch) {
+		t.Fatalf("WriteChunk(wrong geometry) error = %v", err)
+	}
+	closeStore(t, firstStore)
 
 	secondGeometry := mustGeometry(t, geometry.Config{ChunkEdge: 2, LargeChunkEdge: 2, BlockBits: 4})
 	secondStore := mustOpen(t, root, secondGeometry)
+	defer closeStore(t, secondStore)
 	if _, err := secondStore.ReadChunk(coord); !errors.Is(err, ErrCorrupt) ||
 		!errors.Is(err, ErrGeometryMismatch) {
 		t.Fatalf("ReadChunk(wrong geometry) error = %v", err)
-	}
-	if err := firstStore.WriteChunk(coord, mustChunk(t, secondGeometry)); !errors.Is(err, ErrGeometryMismatch) {
-		t.Fatalf("WriteChunk(wrong geometry) error = %v", err)
 	}
 }
 
@@ -214,6 +221,208 @@ func TestStoreConcurrentReadsAndWrites(t *testing.T) {
 	}
 }
 
+func TestStoreWALReopenDurabilityModes(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []DurabilityMode{
+		DurabilityRelaxed,
+		DurabilityFsyncWAL,
+		DurabilityFsyncCheckpoint,
+	} {
+		mode := mode
+		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			g := mustGeometry(t, geometry.Config{ChunkEdge: 2, LargeChunkEdge: 2, BlockBits: 3})
+			options := Options{
+				Durability:        mode,
+				CheckpointRecords: 8,
+				CheckpointBytes:   1 << 20,
+			}
+			store := mustOpenWithOptions(t, root, g, options)
+			coord := geometry.Coord{X: 4, Y: -7}
+			chunk := mustChunk(t, g)
+			if err := chunk.Set(geometry.Offset{X: 1, Y: 1}, 7); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.WriteChunk(coord, chunk); err != nil {
+				t.Fatalf("WriteChunk(): %v", err)
+			}
+			walInfo, err := os.Stat(filepath.Join(root, walName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if walInfo.Size() == 0 {
+				t.Fatal("WAL was checkpointed before either threshold")
+			}
+			if err := os.Remove(store.chunkPath(coord)); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			reopened := mustOpenWithOptions(t, root, g, options)
+			defer closeStore(t, reopened)
+			got, err := reopened.ReadChunk(coord)
+			if err != nil {
+				t.Fatalf("ReadChunk() after replay: %v", err)
+			}
+			value, err := got.Get(geometry.Offset{X: 1, Y: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if value != 7 {
+				t.Fatalf("replayed value = %d, want 7", value)
+			}
+			walInfo, err = os.Stat(filepath.Join(root, walName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if walInfo.Size() != 0 {
+				t.Fatalf("replayed WAL size = %d, want 0", walInfo.Size())
+			}
+		})
+	}
+}
+
+func TestStoreCrashRecoveryDiscardsTruncatedWALTail(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 2, LargeChunkEdge: 2, BlockBits: 2})
+	options := Options{CheckpointRecords: 8, CheckpointBytes: 1 << 20}
+	store := mustOpenWithOptions(t, root, g, options)
+	coord := geometry.Coord{X: -2, Y: 3}
+	chunk := mustChunk(t, g)
+	if err := chunk.Set(geometry.Offset{}, 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteChunk(coord, chunk); err != nil {
+		t.Fatal(err)
+	}
+	partial := store.encodeWALRecord(geometry.Coord{X: 9, Y: 9}, mustChunk(t, g).Bytes())
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wal, err := os.OpenFile(filepath.Join(root, walName), os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wal.Write(partial[:len(partial)/2]); err != nil {
+		_ = wal.Close()
+		t.Fatal(err)
+	}
+	if err := wal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "l_n1_p1", "c_n2_p3.rdb")); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened := mustOpenWithOptions(t, root, g, options)
+	defer closeStore(t, reopened)
+	got, err := reopened.ReadChunk(coord)
+	if err != nil {
+		t.Fatalf("ReadChunk() after truncated tail recovery: %v", err)
+	}
+	value, err := got.Get(geometry.Offset{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != 3 {
+		t.Fatalf("replayed value = %d, want 3", value)
+	}
+	if _, err := reopened.ReadChunk(geometry.Coord{X: 9, Y: 9}); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial record created a chunk: %v", err)
+	}
+}
+
+func TestStoreRejectsCorruptWALRecord(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 1})
+	store := mustOpenWithOptions(t, root, g, Options{CheckpointRecords: 8, CheckpointBytes: 1 << 20})
+	if err := store.WriteChunk(geometry.Coord{}, mustChunk(t, g)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	walPath := filepath.Join(root, walName)
+	encoded, err := os.ReadFile(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded[walHeaderBytes] ^= 1
+	if err := os.WriteFile(walPath, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenWithOptions(root, g, Options{}); !errors.Is(err, ErrCorruptWAL) {
+		t.Fatalf("OpenWithOptions(corrupt WAL) error = %v, want ErrCorruptWAL", err)
+	}
+}
+
+func TestStoreCheckpointsWALThresholds(t *testing.T) {
+	t.Parallel()
+
+	tests := []Options{
+		{CheckpointRecords: 1, CheckpointBytes: 1 << 20},
+		{CheckpointRecords: 8, CheckpointBytes: 1},
+	}
+	for _, options := range tests {
+		root := t.TempDir()
+		g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 1})
+		store := mustOpenWithOptions(t, root, g, options)
+		if err := store.WriteChunk(geometry.Coord{}, mustChunk(t, g)); err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(filepath.Join(root, walName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Size() != 0 {
+			t.Fatalf("WAL size after threshold = %d, want 0", info.Size())
+		}
+		closeStore(t, store)
+	}
+}
+
+func TestOpenRejectsInvalidOptions(t *testing.T) {
+	t.Parallel()
+
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 1})
+	for _, options := range []Options{
+		{Durability: "unknown"},
+		{CheckpointBytes: -1},
+	} {
+		if _, err := OpenWithOptions(t.TempDir(), g, options); err == nil {
+			t.Fatalf("OpenWithOptions(%+v) succeeded", options)
+		}
+	}
+}
+
+func TestClosedStoreRejectsOperations(t *testing.T) {
+	t.Parallel()
+
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 1})
+	store := mustOpen(t, t.TempDir(), g)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReadChunk(geometry.Coord{}); err == nil {
+		t.Fatal("ReadChunk() succeeded after Close()")
+	}
+	if err := store.WriteChunk(geometry.Coord{}, mustChunk(t, g)); err == nil {
+		t.Fatal("WriteChunk() succeeded after Close()")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("second Close(): %v", err)
+	}
+}
+
 func mustGeometry(t *testing.T, config geometry.Config) geometry.Geometry {
 	t.Helper()
 	g, err := geometry.New(config)
@@ -221,6 +430,22 @@ func mustGeometry(t *testing.T, config geometry.Config) geometry.Geometry {
 		t.Fatalf("geometry.New(%+v): %v", config, err)
 	}
 	return g
+}
+
+func mustOpenWithOptions(t *testing.T, root string, g geometry.Geometry, options Options) *Store {
+	t.Helper()
+	store, err := OpenWithOptions(root, g, options)
+	if err != nil {
+		t.Fatalf("OpenWithOptions(): %v", err)
+	}
+	return store
+}
+
+func closeStore(t *testing.T, store *Store) {
+	t.Helper()
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close(): %v", err)
+	}
 }
 
 func mustOpen(t *testing.T, root string, g geometry.Geometry) *Store {

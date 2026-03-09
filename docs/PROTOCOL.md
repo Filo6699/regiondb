@@ -63,5 +63,6 @@ fit the configured block width.
 reported with the `STORAGE` code. The packed payload layout is defined in the
 [storage format specification](STORAGE_FORMAT.md).
 
-No binary command, pipelining guarantee, protocol upgrade, WAL durability
-selection, or default network port is part of version 1.
+No binary command, pipelining guarantee, protocol upgrade, durability
+negotiation, or default network port is part of version 1. Durability is a
+server startup setting and does not change the wire format.

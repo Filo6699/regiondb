@@ -53,11 +53,47 @@ chunks.
 `payload_bytes` is the checked ceiling of
 `chunk_edge * chunk_edge * block_bits / 8`.
 
-## Writes and durability
+## Delta WAL
+
+The data directory contains `.regiondb.wal`. It is a sequence of fixed-size
+records for the configured geometry. Each record contains:
+
+| Offset | Size | Field |
+|---:|---:|---|
+| 0 | 8 | ASCII magic `RGDBWAL1` |
+| 8 | 4 | `chunk_edge` |
+| 12 | 4 | `large_chunk_edge` |
+| 16 | 1 | `block_bits` |
+| 17 | 3 | Reserved, must be zero |
+| 20 | 8 | Chunk X coordinate |
+| 28 | 8 | Chunk Y coordinate |
+| 36 | `payload_bytes` | Replacement packed chunk payload |
+| end - 4 | 4 | IEEE CRC-32 of every preceding byte |
+
+Opening a store validates and replays complete records in order. A final
+partial record is treated as an interrupted append and discarded. Invalid
+magic, geometry, reserved bytes, or checksum in a complete record fails
+closed with no replay.
+
+## Writes, checkpoints, and durability
 
 A write creates a mode `0600` temporary file in the destination directory,
 writes the complete encoded chunk, closes it, and atomically renames it over
-the destination. Directories are created as needed with mode `0755`.
+the destination. Directories are created as needed with mode `0755`. Before
+that replacement, the complete new payload is appended to the WAL.
 
-This format currently has no WAL, checkpoint, fsync durability guarantee,
-cache metadata, tombstone, or alternate backend compatibility contract.
+The WAL is checkpointed when either the configured record or byte threshold
+is reached. A durable checkpoint replays and synchronizes every WAL record
+before truncating and synchronizing the WAL.
+
+- `relaxed` acknowledges after the WAL append and atomic chunk replacement
+  without calling `fsync`.
+- `fsync-wal` synchronizes the WAL record before replacing the chunk and
+  acknowledging the write. Recovery can reconstruct an unsynchronized chunk
+  replacement.
+- `fsync-checkpoint` synchronizes the temporary chunk and its parent directory
+  before acknowledging the write. WAL truncation is also synchronized.
+
+These modes describe single-host filesystem calls. Hardware and filesystem
+behavior can impose weaker guarantees. There is no tombstone or alternate
+backend compatibility contract.

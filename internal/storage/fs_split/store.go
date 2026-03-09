@@ -28,12 +28,20 @@ var (
 )
 
 type Store struct {
-	root     string
-	geometry geometry.Geometry
-	mu       sync.RWMutex
+	root       string
+	geometry   geometry.Geometry
+	options    Options
+	wal        *os.File
+	walRecords uint64
+	walBytes   int64
+	mu         sync.RWMutex
 }
 
 func Open(root string, g geometry.Geometry) (*Store, error) {
+	return OpenWithOptions(root, g, Options{})
+}
+
+func OpenWithOptions(root string, g geometry.Geometry, options Options) (_ *Store, returnErr error) {
 	if root == "" {
 		return nil, errors.New("data directory must not be empty")
 	}
@@ -48,7 +56,46 @@ func Open(root string, g geometry.Geometry) (*Store, error) {
 	if err := os.MkdirAll(absoluteRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create data directory: %w", err)
 	}
-	return &Store{root: absoluteRoot, geometry: g}, nil
+	options, err = options.validated()
+	if err != nil {
+		return nil, fmt.Errorf("open fs_split_v1: %w", err)
+	}
+	wal, err := os.OpenFile(filepath.Join(absoluteRoot, walName), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open WAL: %w", err)
+	}
+	defer func() {
+		if returnErr != nil {
+			if err := wal.Close(); err != nil {
+				returnErr = errors.Join(returnErr, fmt.Errorf("close WAL: %w", err))
+			}
+		}
+	}()
+
+	store := &Store{
+		root:     absoluteRoot,
+		geometry: g,
+		options:  options,
+		wal:      wal,
+	}
+	if err := store.recoverWAL(); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+func (s *Store) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.wal == nil {
+		return nil
+	}
+	if err := s.wal.Close(); err != nil {
+		return fmt.Errorf("close WAL: %w", err)
+	}
+	s.wal = nil
+	return nil
 }
 
 func (s *Store) WriteChunk(coord geometry.Coord, chunk *storage.Chunk) error {
@@ -62,14 +109,24 @@ func (s *Store) WriteChunk(coord geometry.Coord, chunk *storage.Chunk) error {
 		return ErrGeometryMismatch
 	}
 
-	encoded := s.encode(coord, chunk.Bytes())
-	path := s.chunkPath(coord)
-	directory := filepath.Dir(path)
-	if err := os.MkdirAll(directory, 0o755); err != nil {
-		return fmt.Errorf("create large-chunk directory: %w", err)
+	payload := chunk.Bytes()
+	record := s.encodeWALRecord(coord, payload)
+	if s.wal == nil {
+		return errors.New("write chunk: store is closed")
 	}
-	if err := writeAtomic(path, encoded); err != nil {
+	if err := s.appendWAL(record); err != nil {
+		return err
+	}
+	syncCheckpoint := s.options.Durability == DurabilityFsyncCheckpoint
+	if err := s.persistChunk(coord, payload, syncCheckpoint); err != nil {
 		return fmt.Errorf("persist chunk: %w", err)
+	}
+	s.walRecords++
+	s.walBytes += int64(len(record))
+	if s.checkpointDue() {
+		if err := s.checkpointWAL(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -78,6 +135,9 @@ func (s *Store) ReadChunk(coord geometry.Coord) (chunk *storage.Chunk, returnErr
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	if s.wal == nil {
+		return nil, errors.New("read chunk: store is closed")
+	}
 	path := s.chunkPath(coord)
 	file, err := os.Open(path)
 	if err != nil {
@@ -197,7 +257,19 @@ func signedName(value int64) string {
 	return "p" + strconv.FormatInt(value, 10)
 }
 
-func writeAtomic(path string, data []byte) (returnErr error) {
+func (s *Store) persistChunk(coord geometry.Coord, payload []byte, syncData bool) error {
+	path := s.chunkPath(coord)
+	directory := filepath.Dir(path)
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return fmt.Errorf("create large-chunk directory: %w", err)
+	}
+	if err := writeAtomic(path, s.encode(coord, payload), syncData); err != nil {
+		return err
+	}
+	return nil
+}
+
+func writeAtomic(path string, data []byte, syncData bool) (returnErr error) {
 	temporary, err := os.CreateTemp(filepath.Dir(path), ".regiondb-chunk-*")
 	if err != nil {
 		return fmt.Errorf("create temporary file: %w", err)
@@ -224,6 +296,11 @@ func writeAtomic(path string, data []byte) (returnErr error) {
 	if _, err := io.Copy(temporary, bytes.NewReader(data)); err != nil {
 		return fmt.Errorf("write temporary file: %w", err)
 	}
+	if syncData {
+		if err := temporary.Sync(); err != nil {
+			return fmt.Errorf("sync temporary file: %w", err)
+		}
+	}
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("close temporary file: %w", err)
 	}
@@ -232,5 +309,18 @@ func writeAtomic(path string, data []byte) (returnErr error) {
 		return fmt.Errorf("replace destination: %w", err)
 	}
 	renamed = true
+	if syncData {
+		directory, err := os.Open(filepath.Dir(path))
+		if err != nil {
+			return fmt.Errorf("open parent directory: %w", err)
+		}
+		if err := directory.Sync(); err != nil {
+			_ = directory.Close()
+			return fmt.Errorf("sync parent directory: %w", err)
+		}
+		if err := directory.Close(); err != nil {
+			return fmt.Errorf("close parent directory: %w", err)
+		}
+	}
 	return nil
 }

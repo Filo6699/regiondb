@@ -58,6 +58,11 @@ func TestParseConfig(t *testing.T) {
 	if got.geometry.ChunkEdge != 16 || got.geometry.LargeChunkEdge != 8 || got.geometry.BlockBits != 5 {
 		t.Fatalf("parseConfig() geometry = %+v", got.geometry)
 	}
+	if got.durability != fs_split.DurabilityRelaxed ||
+		got.checkpointRecords != fs_split.DefaultCheckpointRecords ||
+		got.checkpointBytes != fs_split.DefaultCheckpointBytes {
+		t.Fatalf("parseConfig() storage options = %+v", got)
+	}
 }
 
 func TestParseConfigRejectsMissingRuntimeFlags(t *testing.T) {
@@ -98,6 +103,42 @@ func TestParseConfigRejectsIncompleteTLS(t *testing.T) {
 		args := append(append([]string(nil), base...), tlsFlag, "server.pem")
 		if _, err := parseConfig(args, ioDiscard{}); err == nil {
 			t.Fatalf("parseConfig(%q) succeeded", args)
+		}
+	}
+}
+
+func TestParseConfigStorageOptions(t *testing.T) {
+	t.Parallel()
+
+	base := []string{
+		"-listen", "127.0.0.1:0",
+		"-data-dir", "data",
+		"-token", "secret",
+		"-chunk-edge", "1",
+		"-large-chunk-edge", "1",
+		"-block-bits", "1",
+	}
+	args := append(append([]string(nil), base...),
+		"-durability", "fsync-wal",
+		"-checkpoint-records", "7",
+		"-checkpoint-bytes", "4096",
+	)
+	got, err := parseConfig(args, ioDiscard{})
+	if err != nil {
+		t.Fatalf("parseConfig() error = %v", err)
+	}
+	if got.durability != fs_split.DurabilityFsyncWAL ||
+		got.checkpointRecords != 7 || got.checkpointBytes != 4096 {
+		t.Fatalf("parseConfig() storage options = %+v", got)
+	}
+
+	for _, invalid := range [][]string{
+		{"-durability", "unknown"},
+		{"-checkpoint-records", "0"},
+		{"-checkpoint-bytes", "0"},
+	} {
+		if _, err := parseConfig(append(append([]string(nil), base...), invalid...), ioDiscard{}); err == nil {
+			t.Fatalf("parseConfig(%q) succeeded", invalid)
 		}
 	}
 }

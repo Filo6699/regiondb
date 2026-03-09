@@ -31,16 +31,19 @@ func main() {
 }
 
 type config struct {
-	listenAddress string
-	dataDir       string
-	token         string
-	tlsCert       string
-	tlsKey        string
-	geometry      geometry.Config
-	version       bool
+	listenAddress     string
+	dataDir           string
+	token             string
+	tlsCert           string
+	tlsKey            string
+	durability        fs_split.DurabilityMode
+	checkpointRecords uint64
+	checkpointBytes   int64
+	geometry          geometry.Config
+	version           bool
 }
 
-func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnErr error) {
 	config, err := parseConfig(args, stderr)
 	if err != nil {
 		return err
@@ -58,10 +61,19 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("configure geometry: %w", err)
 	}
-	store, err := fs_split.Open(config.dataDir, g)
+	store, err := fs_split.OpenWithOptions(config.dataDir, g, fs_split.Options{
+		Durability:        config.durability,
+		CheckpointRecords: config.checkpointRecords,
+		CheckpointBytes:   config.checkpointBytes,
+	})
 	if err != nil {
 		return fmt.Errorf("open chunk store: %w", err)
 	}
+	defer func() {
+		if err := store.Close(); err != nil && returnErr == nil {
+			returnErr = fmt.Errorf("close chunk store: %w", err)
+		}
+	}()
 	engine, err := protocol.NewEngine(g, store, config.token)
 	if err != nil {
 		return err
@@ -101,11 +113,15 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	var chunkEdge uint64
 	var largeChunkEdge uint64
 	var blockBits uint64
+	var durability string
 	flags.StringVar(&result.listenAddress, "listen", "", "TCP listen address in host:port form")
 	flags.StringVar(&result.dataDir, "data-dir", "", "directory for chunk data")
 	flags.StringVar(&result.token, "token", "", "authentication token")
 	flags.StringVar(&result.tlsCert, "tls-cert", "", "PEM TLS certificate file")
 	flags.StringVar(&result.tlsKey, "tls-key", "", "PEM TLS private key file")
+	flags.StringVar(&durability, "durability", string(fs_split.DurabilityRelaxed), "durability mode: relaxed, fsync-wal, or fsync-checkpoint")
+	flags.Uint64Var(&result.checkpointRecords, "checkpoint-records", fs_split.DefaultCheckpointRecords, "WAL records between checkpoints")
+	flags.Int64Var(&result.checkpointBytes, "checkpoint-bytes", fs_split.DefaultCheckpointBytes, "WAL bytes between checkpoints")
 	flags.Uint64Var(&chunkEdge, "chunk-edge", 0, "blocks per chunk edge")
 	flags.Uint64Var(&largeChunkEdge, "large-chunk-edge", 0, "chunks per large-chunk edge")
 	flags.Uint64Var(&blockBits, "block-bits", 0, "bits per block")
@@ -130,6 +146,18 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	}
 	if (result.tlsCert == "") != (result.tlsKey == "") {
 		return config{}, errors.New("-tls-cert and -tls-key must be provided together")
+	}
+	result.durability = fs_split.DurabilityMode(durability)
+	switch result.durability {
+	case fs_split.DurabilityRelaxed, fs_split.DurabilityFsyncWAL, fs_split.DurabilityFsyncCheckpoint:
+	default:
+		return config{}, fmt.Errorf("invalid -durability value %q", durability)
+	}
+	if result.checkpointRecords == 0 {
+		return config{}, errors.New("-checkpoint-records must be positive")
+	}
+	if result.checkpointBytes <= 0 {
+		return config{}, errors.New("-checkpoint-bytes must be positive")
 	}
 	if chunkEdge > math.MaxUint32 || largeChunkEdge > math.MaxUint32 || blockBits > math.MaxUint8 {
 		return config{}, errors.New("geometry flag value is out of range")
