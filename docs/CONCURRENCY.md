@@ -5,14 +5,15 @@ version.
 
 ## Server ownership
 
-One `Serve` call owns one listener. Each accepted connection is handled in its
-own goroutine and has independent authentication and close state. Cancelling
-the server context closes the listener and active connections, then waits for
-their handlers to return.
+One `Serve` call owns one listener and a fixed-size worker pool. Accepted
+connections wait in a bounded queue; the accept loop stops accepting while all
+workers and queue slots are occupied. Each worker handles one connection at a
+time, so a slow client cannot create an unbounded number of goroutines.
+Connections retain independent authentication and close state.
 
-The current runtime does not bound accepted connections or assign them to a
-worker pool. Operators must impose connection limits outside the process when
-needed.
+Cancelling the server context closes the listener plus active and queued
+connections, then waits for all workers to return. Workers, queue capacity, and
+the maximum command line size are server startup settings.
 
 ## In-process storage access
 

@@ -79,11 +79,13 @@ func TestSessionBlockAndChunkCommands(t *testing.T) {
 		{frame: "CHUNK -1 0\r\n", want: "$4\r\n3800\r\n"},
 		{frame: "CHUNKSET 2 -3 4104\r\n", want: "+OK\r\n"},
 		{frame: "CHUNK 2 -3\r\n", want: "$4\r\n4104\r\n"},
+		{frame: "CHUNKBIN 2 -3\r\n", want: "$2\r\n\x41\x04\r\n"},
 		{frame: "GET 4 -6\r\n", want: "$1\r\n1\r\n"},
 		{frame: "GET 5 -6\r\n", want: "$1\r\n0\r\n"},
 		{frame: "GET 4 -5\r\n", want: "$1\r\n1\r\n"},
 		{frame: "GET 5 -5\r\n", want: "$1\r\n2\r\n"},
 		{frame: "CHUNK 99 99\r\n", want: "-ERR NOT_FOUND chunk does not exist\r\n"},
+		{frame: "CHUNKBIN 99 99\r\n", want: "-ERR NOT_FOUND chunk does not exist\r\n"},
 	}
 
 	for _, test := range tests {
@@ -176,6 +178,7 @@ func TestSessionEnforcesCommandArity(t *testing.T) {
 		"SET 1 2\r\n",
 		"EXISTS 1 2 3\r\n",
 		"CHUNK 1\r\n",
+		"CHUNKBIN 1\r\n",
 		"CHUNKSET 1 2\r\n",
 		"QUIT extra\r\n",
 	}
@@ -201,6 +204,7 @@ func TestSessionStorageErrors(t *testing.T) {
 
 	store.readErr = errors.New("read failure")
 	assertResponse(t, session, "GET 0 0\r\n", "-ERR STORAGE read failed\r\n")
+	assertResponse(t, session, "CHUNKBIN 0 0\r\n", "-ERR STORAGE read failed\r\n")
 	store.readErr = nil
 	store.writeErr = errors.New("write failure")
 	assertResponse(t, session, "SET 0 0 1\r\n", "-ERR STORAGE write failed\r\n")

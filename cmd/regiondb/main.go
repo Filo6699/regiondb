@@ -40,6 +40,9 @@ type config struct {
 	checkpointRecords uint64
 	checkpointBytes   int64
 	maxLoadedChunks   int
+	workers           int
+	acceptQueue       int
+	maxLineBytes      int
 	geometry          geometry.Config
 	version           bool
 }
@@ -90,7 +93,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnEr
 	defer func() {
 		_ = listener.Close()
 	}()
-	return server.Serve(ctx, listener, engine)
+	return server.ServeWithOptions(ctx, listener, engine, server.Options{
+		Workers:      config.workers,
+		AcceptQueue:  config.acceptQueue,
+		MaxLineBytes: config.maxLineBytes,
+	})
 }
 
 func loadTLSConfig(config config) (*tls.Config, error) {
@@ -125,6 +132,10 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	flags.Uint64Var(&result.checkpointRecords, "checkpoint-records", fs_split.DefaultCheckpointRecords, "WAL records between checkpoints")
 	flags.Int64Var(&result.checkpointBytes, "checkpoint-bytes", fs_split.DefaultCheckpointBytes, "WAL bytes between checkpoints")
 	flags.IntVar(&result.maxLoadedChunks, "max-loaded-chunks", fs_split.DefaultMaxLoadedChunks, "maximum chunks retained in memory")
+	runtimeDefaults := server.DefaultOptions()
+	flags.IntVar(&result.workers, "workers", runtimeDefaults.Workers, "number of connection workers")
+	flags.IntVar(&result.acceptQueue, "accept-queue", runtimeDefaults.AcceptQueue, "maximum queued connections")
+	flags.IntVar(&result.maxLineBytes, "max-line-bytes", runtimeDefaults.MaxLineBytes, "maximum command line size including CRLF")
 	flags.Uint64Var(&chunkEdge, "chunk-edge", 0, "blocks per chunk edge")
 	flags.Uint64Var(&largeChunkEdge, "large-chunk-edge", 0, "chunks per large-chunk edge")
 	flags.Uint64Var(&blockBits, "block-bits", 0, "bits per block")
@@ -164,6 +175,15 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	}
 	if result.maxLoadedChunks <= 0 {
 		return config{}, errors.New("-max-loaded-chunks must be positive")
+	}
+	if result.workers <= 0 {
+		return config{}, errors.New("-workers must be positive")
+	}
+	if result.acceptQueue < 0 {
+		return config{}, errors.New("-accept-queue must not be negative")
+	}
+	if result.maxLineBytes <= 0 {
+		return config{}, errors.New("-max-line-bytes must be positive")
 	}
 	if chunkEdge > math.MaxUint32 || largeChunkEdge > math.MaxUint32 || blockBits > math.MaxUint8 {
 		return config{}, errors.New("geometry flag value is out of range")

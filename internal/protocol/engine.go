@@ -107,6 +107,8 @@ func (s *Session) Execute(command Command) Response {
 		return s.exists(command.Args)
 	case "CHUNK":
 		return s.chunk(command.Args)
+	case "CHUNKBIN":
+		return s.chunkBinary(command.Args)
 	case "CHUNKSET":
 		return s.chunkSet(command.Args)
 	default:
@@ -205,26 +207,44 @@ func (s *Session) exists(args []string) Response {
 }
 
 func (s *Session) chunk(args []string) Response {
-	if response := requireArity(args, 2); response != nil {
-		return *response
-	}
-	coord, response := parseCoord(args)
+	chunk, response := s.readChunkCommand(args)
 	if response != nil {
 		return *response
-	}
-	s.engine.mu.RLock()
-	defer s.engine.mu.RUnlock()
-	chunk, found, err := s.readChunk(coord)
-	if err != nil {
-		return errorResponse("STORAGE", "read failed")
-	}
-	if !found {
-		return errorResponse("NOT_FOUND", "chunk does not exist")
 	}
 	payload := chunk.Bytes()
 	encoded := make([]byte, hex.EncodedLen(len(payload)))
 	hex.Encode(encoded, payload)
 	return bulkResponse(encoded)
+}
+
+func (s *Session) chunkBinary(args []string) Response {
+	chunk, response := s.readChunkCommand(args)
+	if response != nil {
+		return *response
+	}
+	return bulkResponse(chunk.Bytes())
+}
+
+func (s *Session) readChunkCommand(args []string) (*storage.Chunk, *Response) {
+	if response := requireArity(args, 2); response != nil {
+		return nil, response
+	}
+	coord, response := parseCoord(args)
+	if response != nil {
+		return nil, response
+	}
+	s.engine.mu.RLock()
+	defer s.engine.mu.RUnlock()
+	chunk, found, err := s.readChunk(coord)
+	if err != nil {
+		result := errorResponse("STORAGE", "read failed")
+		return nil, &result
+	}
+	if !found {
+		result := errorResponse("NOT_FOUND", "chunk does not exist")
+		return nil, &result
+	}
+	return chunk, nil
 }
 
 func (s *Session) chunkSet(args []string) Response {

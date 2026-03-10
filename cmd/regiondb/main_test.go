@@ -61,8 +61,11 @@ func TestParseConfig(t *testing.T) {
 	if got.durability != fs_split.DurabilityRelaxed ||
 		got.checkpointRecords != fs_split.DefaultCheckpointRecords ||
 		got.checkpointBytes != fs_split.DefaultCheckpointBytes ||
-		got.maxLoadedChunks != fs_split.DefaultMaxLoadedChunks {
-		t.Fatalf("parseConfig() storage options = %+v", got)
+		got.maxLoadedChunks != fs_split.DefaultMaxLoadedChunks ||
+		got.workers != server.DefaultOptions().Workers ||
+		got.acceptQueue != server.DefaultAcceptQueue ||
+		got.maxLineBytes != server.DefaultMaxLineBytes {
+		t.Fatalf("parseConfig() options = %+v", got)
 	}
 }
 
@@ -124,6 +127,9 @@ func TestParseConfigStorageOptions(t *testing.T) {
 		"-checkpoint-records", "7",
 		"-checkpoint-bytes", "4096",
 		"-max-loaded-chunks", "3",
+		"-workers", "2",
+		"-accept-queue", "4",
+		"-max-line-bytes", "8192",
 	)
 	got, err := parseConfig(args, ioDiscard{})
 	if err != nil {
@@ -131,8 +137,9 @@ func TestParseConfigStorageOptions(t *testing.T) {
 	}
 	if got.durability != fs_split.DurabilityFsyncWAL ||
 		got.checkpointRecords != 7 || got.checkpointBytes != 4096 ||
-		got.maxLoadedChunks != 3 {
-		t.Fatalf("parseConfig() storage options = %+v", got)
+		got.maxLoadedChunks != 3 || got.workers != 2 ||
+		got.acceptQueue != 4 || got.maxLineBytes != 8192 {
+		t.Fatalf("parseConfig() options = %+v", got)
 	}
 
 	for _, invalid := range [][]string{
@@ -140,6 +147,9 @@ func TestParseConfigStorageOptions(t *testing.T) {
 		{"-checkpoint-records", "0"},
 		{"-checkpoint-bytes", "0"},
 		{"-max-loaded-chunks", "0"},
+		{"-workers", "0"},
+		{"-accept-queue", "-1"},
+		{"-max-line-bytes", "0"},
 	} {
 		if _, err := parseConfig(append(append([]string(nil), base...), invalid...), ioDiscard{}); err == nil {
 			t.Fatalf("parseConfig(%q) succeeded", invalid)

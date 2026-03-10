@@ -25,8 +25,10 @@ go run ./cmd/regiondb \
 Storage defaults to `relaxed` durability. Operators can select `fsync-wal` or
 `fsync-checkpoint` and tune WAL checkpoint thresholds with
 `-checkpoint-records` and `-checkpoint-bytes`. `-max-loaded-chunks` bounds the
-in-memory LRU cache. The exact acknowledgement boundaries are defined in the
-storage format specification.
+in-memory LRU cache. `-workers`, `-accept-queue`, and `-max-line-bytes` bound
+connection processing, queued accepted connections, and command lines. The
+exact acknowledgement boundaries are defined in the storage format
+specification.
 
 To enable TLS, provide both files from a PEM certificate/key pair:
 

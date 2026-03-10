@@ -56,13 +56,18 @@ fit the configured block width.
 | `SET x y value` | `+OK` | Persist one packed block value. |
 | `EXISTS x y` | `+OK 0` or `+OK 1` | Report whether the current block value is nonzero. |
 | `CHUNK x y` | Bulk lowercase hexadecimal payload | Read a packed regular chunk by chunk coordinate. |
+| `CHUNKBIN x y` | Bulk binary payload | Read the exact packed regular-chunk bytes without hexadecimal encoding. |
 | `CHUNKSET x y payload` | `+OK` | Persist a packed regular chunk from an exact-length hexadecimal payload. |
 | `QUIT` | `+OK` | Close the session after the response. |
 
-`CHUNK` returns `NOT_FOUND` when its chunk file is absent. Storage failures are
-reported with the `STORAGE` code. The packed payload layout is defined in the
+`CHUNK` and `CHUNKBIN` return `NOT_FOUND` when their chunk file is absent.
+Storage failures are reported with the `STORAGE` code. The binary byte count
+is the existing bulk response length; payload bytes may contain any value.
+The packed payload layout is defined in the
 [storage format specification](STORAGE_FORMAT.md).
 
-No binary command, pipelining guarantee, protocol upgrade, durability
-negotiation, or default network port is part of version 1. Durability is a
-server startup setting and does not change the wire format.
+The server rejects command lines larger than its configured `max_line_bytes`
+limit, including CRLF, and keeps the connection available after a complete
+oversized line. No binary write command, pipelining guarantee, protocol
+upgrade, durability negotiation, or default network port is part of version
+1. Durability is a server startup setting and does not change the wire format.
