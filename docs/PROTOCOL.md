@@ -69,5 +69,6 @@ The packed payload layout is defined in the
 The server rejects command lines larger than its configured `max_line_bytes`
 limit, including CRLF, and keeps the connection available after a complete
 oversized line. No binary write command, pipelining guarantee, protocol
-upgrade, durability negotiation, or default network port is part of version
-1. Durability is a server startup setting and does not change the wire format.
+upgrade, or durability negotiation is part of version 1. The CLI listens on
+`127.0.0.1:4242` by default. Durability is a server startup setting and does
+not change the wire format.

@@ -77,13 +77,17 @@ func TestRunQuickTCPBenchmark(t *testing.T) {
 	}
 }
 
-func TestParseConfigRequiresConnectionSettings(t *testing.T) {
+func TestParseConfigUsesDefaultAddressAndRequiresToken(t *testing.T) {
 	t.Parallel()
 
 	if _, err := parseConfig(nil, &bytes.Buffer{}); err == nil {
-		t.Fatal("parseConfig() succeeded without an address")
-	}
-	if _, err := parseConfig([]string{"-address", "127.0.0.1:8123"}, &bytes.Buffer{}); err == nil {
 		t.Fatal("parseConfig() succeeded without a token")
+	}
+	got, err := parseConfig([]string{"-token", "secret"}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("parseConfig() error = %v", err)
+	}
+	if got.address != server.DefaultAddress {
+		t.Fatalf("parseConfig() address = %q, want %q", got.address, server.DefaultAddress)
 	}
 }

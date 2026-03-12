@@ -20,6 +20,7 @@ import (
 
 	"github.com/Filo6699/regiondb/internal/benchmark"
 	"github.com/Filo6699/regiondb/internal/geometry"
+	"github.com/Filo6699/regiondb/internal/server"
 )
 
 const networkTimeout = 5 * time.Second
@@ -107,7 +108,7 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	var chunkEdge uint64
 	var largeChunkEdge uint64
 	var blockBits uint64
-	flags.StringVar(&result.address, "address", "", "server TCP address in host:port form")
+	flags.StringVar(&result.address, "address", server.DefaultAddress, "server TCP address in host:port form")
 	flags.StringVar(&result.token, "token", "", "server authentication token")
 	flags.Int64Var(&result.scenario.Seed, "seed", benchmark.DefaultSeed, "workload random seed")
 	flags.IntVar(&result.scenario.Operations, "ops", benchmark.DefaultOperations, "number of measured operations")
@@ -122,7 +123,7 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 		return config{}, errors.New("unexpected positional arguments")
 	}
 	if result.address == "" {
-		return config{}, errors.New("-address is required")
+		return config{}, errors.New("-address must not be empty")
 	}
 	if result.token == "" {
 		return config{}, errors.New("-token is required")

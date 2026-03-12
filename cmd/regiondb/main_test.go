@@ -42,7 +42,6 @@ func TestParseConfig(t *testing.T) {
 
 	var stderr bytes.Buffer
 	got, err := parseConfig([]string{
-		"-listen", "127.0.0.1:0",
 		"-data-dir", "data",
 		"-token", "secret",
 		"-chunk-edge", "16",
@@ -52,7 +51,7 @@ func TestParseConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseConfig() error = %v, stderr = %q", err, stderr.String())
 	}
-	if got.listenAddress != "127.0.0.1:0" || got.dataDir != "data" || got.token != "secret" {
+	if got.listenAddress != server.DefaultAddress || got.dataDir != "data" || got.token != "secret" {
 		t.Fatalf("parseConfig() strings = %+v", got)
 	}
 	if got.geometry.ChunkEdge != 16 || got.geometry.LargeChunkEdge != 8 || got.geometry.BlockBits != 5 {
@@ -75,7 +74,7 @@ func TestParseConfigRejectsMissingRuntimeFlags(t *testing.T) {
 	tests := [][]string{
 		nil,
 		{"-data-dir", "data"},
-		{"-listen", "127.0.0.1:0"},
+		{"-listen", "", "-data-dir", "data", "-token", "secret"},
 		{
 			"-listen", "127.0.0.1:0",
 			"-data-dir", "data",

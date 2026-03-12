@@ -14,6 +14,7 @@ import (
 )
 
 const (
+	DefaultAddress      = "127.0.0.1:4242"
 	DefaultAcceptQueue  = 128
 	DefaultMaxLineBytes = 1 << 20
 )
@@ -100,6 +101,12 @@ func ServeWithOptions(
 				case <-serveCtx.Done():
 					return
 				case connection := <-queue:
+					if serveCtx.Err() != nil {
+						connections.Delete(connection)
+						_ = connection.Close()
+						<-slots
+						return
+					}
 					serveConnection(connection, engine, options.MaxLineBytes)
 					connections.Delete(connection)
 					_ = connection.Close()

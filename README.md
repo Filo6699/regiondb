@@ -13,7 +13,6 @@ All geometry and authentication settings are explicit:
 
 ```sh
 go run ./cmd/regiondb \
-  -listen 127.0.0.1:8123 \
   -data-dir ./data \
   -token development-secret \
   -chunk-edge 16 \
@@ -30,11 +29,13 @@ connection processing, queued accepted connections, and command lines. The
 exact acknowledgement boundaries are defined in the storage format
 specification.
 
+The server listens on `127.0.0.1:4242` by default. Use `-listen` to select a
+different interface or port.
+
 To enable TLS, provide both files from a PEM certificate/key pair:
 
 ```sh
 go run ./cmd/regiondb \
-  -listen 127.0.0.1:8123 \
   -data-dir ./data \
   -token development-secret \
   -chunk-edge 16 \

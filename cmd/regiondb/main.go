@@ -123,7 +123,7 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	var largeChunkEdge uint64
 	var blockBits uint64
 	var durability string
-	flags.StringVar(&result.listenAddress, "listen", "", "TCP listen address in host:port form")
+	flags.StringVar(&result.listenAddress, "listen", server.DefaultAddress, "TCP listen address in host:port form")
 	flags.StringVar(&result.dataDir, "data-dir", "", "directory for chunk data")
 	flags.StringVar(&result.token, "token", "", "authentication token")
 	flags.StringVar(&result.tlsCert, "tls-cert", "", "PEM TLS certificate file")
@@ -150,7 +150,7 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 		return result, nil
 	}
 	if result.listenAddress == "" {
-		return config{}, errors.New("-listen is required")
+		return config{}, errors.New("-listen must not be empty")
 	}
 	if result.dataDir == "" {
 		return config{}, errors.New("-data-dir is required")

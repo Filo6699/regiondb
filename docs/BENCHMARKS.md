@@ -15,10 +15,10 @@ types, coordinates, and payload values. Read and mixed runs prepare a bounded
 working set before timing so their measured reads address existing chunks.
 
 The direct benchmark requires its own `-data-dir`. Its `-durability` setting
-selects one of the existing storage durability modes. The TCP benchmark
-requires `-address` and `-token`. Its geometry flags should match the server
-configuration; `chunk-edge` and `block-bits` determine the packed chunk payload
-length.
+selects one of the existing storage durability modes. The TCP benchmark uses
+`127.0.0.1:4242` by default and requires `-token`. Its geometry flags should
+match the server configuration; `chunk-edge` and `block-bits` determine the
+packed chunk payload length.
 
 For example:
 
@@ -30,11 +30,10 @@ go run ./cmd/regiondb-direct-bench \
   -workload mixed
 ```
 
-With a server already listening on `127.0.0.1:8123`:
+With a server listening on the default address:
 
 ```sh
 go run ./cmd/regiondb-bench \
-  -address 127.0.0.1:8123 \
   -token development-secret \
   -seed 42 \
   -ops 1000 \
