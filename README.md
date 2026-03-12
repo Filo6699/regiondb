@@ -1,7 +1,7 @@
 # regiondb
 
-`regiondb` is a Go project for storing chunk and grid data for games and
-grid-based simulations.
+`regiondb` is a specialized chunk/grid storage engine for games and grid-based
+simulations.
 
 The current development version provides a packed chunk store backed by the
 `fs_split_v1` on-disk format and an authenticated text protocol over TCP or
@@ -54,6 +54,15 @@ The current contracts are documented in:
 - [Protocol specification](docs/PROTOCOL.md)
 - [Storage format](docs/STORAGE_FORMAT.md)
 - [Concurrency model](docs/CONCURRENCY.md)
+- [Scenario benchmarks](docs/BENCHMARKS.md)
+
+## Scenario benchmarks
+
+The repository provides direct `fs_split_v1` and TCP scenario benchmarks with
+seeded read, write, and mixed workloads. Both emit JSON latency percentiles and
+operation counts. Their results characterize the implemented chunk paths on a
+particular configuration and machine; they are not general database
+performance claims or CI thresholds.
 
 ## Development
 
