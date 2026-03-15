@@ -56,6 +56,7 @@ The current contracts are documented in:
 - [Storage format](docs/STORAGE_FORMAT.md)
 - [Concurrency model](docs/CONCURRENCY.md)
 - [Scenario benchmarks](docs/BENCHMARKS.md)
+- [Release notes](docs/releases/v0.1.0-alpha.md)
 
 ## Scenario benchmarks
 
