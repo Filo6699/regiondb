@@ -21,12 +21,56 @@ jobs:
         uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
         with:
           go-version: "1.24.x"
+          cache: true
+          cache-dependency-path: go.mod
 
       - name: Check formatting
         run: test -z "$(gofmt -l .)"
 
   test:
-    name: ubuntu
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu
+            os: ubuntu-latest
+            test-packages: ./...
+          - name: macos
+            os: macos-latest
+            test-packages: ./...
+          - name: windows
+            os: windows-latest
+            test-packages: >-
+              ./internal/benchmark
+              ./internal/bitcodec
+              ./internal/geometry
+              ./internal/protocol
+              ./internal/storage
+              ./pkg/regiondb
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+        with:
+          go-version: "1.24.x"
+          cache: true
+          cache-dependency-path: go.mod
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ${{ matrix.test-packages }}
+
+      - name: Build
+        run: go build ./...
+
+  race:
+    name: race
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -36,12 +80,8 @@ jobs:
         uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
         with:
           go-version: "1.24.x"
+          cache: true
+          cache-dependency-path: go.mod
 
-      - name: Vet
-        run: go vet ./...
-
-      - name: Test
-        run: go test ./...
-
-      - name: Build
-        run: go build ./...
+      - name: Test with race detector
+        run: go test -race ./...

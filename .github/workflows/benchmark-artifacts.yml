@@ -1,0 +1,94 @@
+name: Benchmark artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: Deterministic workload seed
+        required: true
+        default: "42"
+        type: string
+      operations:
+        description: Measured operation count
+        required: true
+        default: "10000"
+        type: string
+      workload:
+        description: Workload mix
+        required: true
+        default: mixed
+        type: choice
+        options:
+          - read
+          - write
+          - mixed
+      durability:
+        description: Storage durability mode
+        required: true
+        default: relaxed
+        type: choice
+        options:
+          - relaxed
+          - fsync-wal
+          - fsync-checkpoint
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  direct:
+    name: direct
+    runs-on: ubuntu-latest
+    env:
+      BENCHMARK_SEED: ${{ inputs.seed || '42' }}
+      BENCHMARK_OPERATIONS: ${{ inputs.operations || '10000' }}
+      BENCHMARK_WORKLOAD: ${{ inputs.workload || 'mixed' }}
+      BENCHMARK_DURABILITY: ${{ inputs.durability || 'relaxed' }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+        with:
+          go-version: "1.24.x"
+          cache: true
+          cache-dependency-path: go.mod
+
+      - name: Build benchmark
+        run: go build -trimpath -o benchmark-runner ./cmd/regiondb-direct-bench
+
+      - name: Run benchmark and write manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir="$RUNNER_TEMP/regiondb-benchmark-artifact"
+          data_dir="$RUNNER_TEMP/regiondb-benchmark-data"
+          mkdir -p "$artifact_dir" "$data_dir"
+
+          flags="-data-dir <temporary> -seed ${BENCHMARK_SEED} -ops ${BENCHMARK_OPERATIONS} -workload ${BENCHMARK_WORKLOAD} -durability ${BENCHMARK_DURABILITY}"
+          ./benchmark-runner \
+            -data-dir "$data_dir" \
+            -seed "$BENCHMARK_SEED" \
+            -ops "$BENCHMARK_OPERATIONS" \
+            -workload "$BENCHMARK_WORKLOAD" \
+            -durability "$BENCHMARK_DURABILITY" \
+            | tee "$artifact_dir/raw-output.json"
+
+          git_sha="$(git rev-parse HEAD)"
+          go_version="$(go env GOVERSION)"
+          go_os="$(go env GOOS)"
+          go_arch="$(go env GOARCH)"
+          printf '{\n  "git_sha": "%s",\n  "go_version": "%s",\n  "os": "%s",\n  "arch": "%s",\n  "flags": "%s",\n  "seed": %s,\n  "raw_output": "raw-output.json"\n}\n' \
+            "$git_sha" "$go_version" "$go_os" "$go_arch" "$flags" "$BENCHMARK_SEED" \
+            > "$artifact_dir/manifest.json"
+
+      - name: Upload benchmark artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: regiondb-direct-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/regiondb-benchmark-artifact
+          if-no-files-found: error
+          retention-days: 30
