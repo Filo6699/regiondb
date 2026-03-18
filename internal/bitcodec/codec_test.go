@@ -86,6 +86,33 @@ func TestCodecRejectsInvalidOperations(t *testing.T) {
 	}
 }
 
+func TestPackedBytesRespectsTargetIntWidth(t *testing.T) {
+	t.Parallel()
+
+	codec, err := New(1, LSBFirst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maxInt := targetMaxInt()
+	if maxInt > math.MaxUint32 {
+		if _, err := codec.PackedBytes(math.MaxUint64); err != nil {
+			t.Fatalf("PackedBytes(MaxUint64) error = %v", err)
+		}
+		return
+	}
+	maxCount := maxInt * 8
+	if got, err := codec.PackedBytes(maxCount); err != nil || got != math.MaxInt {
+		t.Fatalf("PackedBytes(MaxInt) = %d, %v", got, err)
+	}
+	if _, err := codec.PackedBytes(maxCount + 1); !errors.Is(err, ErrOutOfRange) {
+		t.Fatalf("PackedBytes(MaxInt + 1) error = %v", err)
+	}
+}
+
+func targetMaxInt() uint64 {
+	return uint64(math.MaxInt)
+}
+
 func TestLittleEndianHelpers(t *testing.T) {
 	t.Parallel()
 

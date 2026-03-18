@@ -47,8 +47,7 @@ func (c Codec) PackedBytes(count uint64) (int, error) {
 	if bits%8 != 0 {
 		bytes++
 	}
-	maxInt := uint64(^uint(0) >> 1)
-	if bytes > maxInt {
+	if bytes > uint64(math.MaxInt) {
 		return 0, fmt.Errorf("%w: packed byte count overflows int", ErrOutOfRange)
 	}
 	return int(bytes), nil
