@@ -228,6 +228,92 @@ func TestStoreConcurrentReadsAndWrites(t *testing.T) {
 	}
 }
 
+func TestStressHotContentionEvictionCycles(t *testing.T) {
+	t.Parallel()
+
+	const (
+		workerCount = 8
+		cycles      = 100
+	)
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 2, BlockBits: 8})
+	store := mustOpenWithOptions(t, t.TempDir(), g, Options{MaxLoadedChunks: 2})
+	coords := make([]geometry.Coord, workerCount)
+	for worker := range workerCount {
+		coords[worker] = geometry.Coord{X: int64(worker), Y: int64(-worker)}
+		if err := store.WriteChunk(coords[worker], mustChunk(t, g)); err != nil {
+			t.Fatalf("initialize chunk %v: %v", coords[worker], err)
+		}
+	}
+
+	start := make(chan struct{})
+	results := make(chan error, workerCount)
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for worker := range workerCount {
+		go func(worker int) {
+			defer workers.Done()
+			<-start
+			for cycle := range cycles {
+				value := byte(cycle + worker)
+				chunk, err := storage.NewChunk(g)
+				if err != nil {
+					results <- fmt.Errorf("worker %d cycle %d: create chunk: %w", worker, cycle, err)
+					return
+				}
+				if err := chunk.Set(geometry.Offset{}, uint64(value)); err != nil {
+					results <- fmt.Errorf("worker %d cycle %d: set value: %w", worker, cycle, err)
+					return
+				}
+				if err := store.WriteChunk(coords[worker], chunk); err != nil {
+					results <- fmt.Errorf("worker %d cycle %d: write chunk: %w", worker, cycle, err)
+					return
+				}
+
+				// Sweep the shared working set so every cycle reloads chunks
+				// that other workers have displaced from the small cache.
+				for offset := range workerCount {
+					coord := coords[(worker+offset)%workerCount]
+					if _, err := store.ReadChunk(coord); err != nil {
+						results <- fmt.Errorf(
+							"worker %d cycle %d: read chunk %v: %w",
+							worker,
+							cycle,
+							coord,
+							err,
+						)
+						return
+					}
+				}
+			}
+			results <- nil
+		}(worker)
+	}
+
+	close(start)
+	workers.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for worker, coord := range coords {
+		chunk, err := store.ReadChunk(coord)
+		if err != nil {
+			t.Fatalf("final ReadChunk(%v): %v", coord, err)
+		}
+		value, err := chunk.Get(geometry.Offset{})
+		if err != nil {
+			t.Fatalf("final chunk %v value: %v", coord, err)
+		}
+		want := uint64(byte(cycles - 1 + worker))
+		if value != want {
+			t.Fatalf("final chunk %v value = %d, want %d", coord, value, want)
+		}
+	}
+}
+
 func TestStoreWALReopenDurabilityModes(t *testing.T) {
 	t.Parallel()
 
