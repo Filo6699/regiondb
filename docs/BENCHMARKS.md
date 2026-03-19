@@ -7,6 +7,13 @@ regiondb includes two scenario benchmark programs:
 - `regiondb-bench` measures complete `CHUNKSET` and `CHUNKBIN` round trips over
   an existing plaintext TCP server connection.
 
+The protocol package also provides focused server command benchmarks for
+`PING`, `INFO`, hexadecimal `CHUNK`, and binary `CHUNKBIN` response paths:
+
+```sh
+go test -run '^$' -bench BenchmarkSessionCommands ./internal/protocol
+```
+
 Both programs accept `-seed`, `-ops`, and `-workload`. The operation count must
 be positive and is bounded at 10,000,000 so exact percentile samples remain
 bounded. The supported workloads are `read`, `write`, and `mixed`; `mixed`

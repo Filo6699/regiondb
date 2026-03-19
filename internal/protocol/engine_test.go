@@ -44,6 +44,12 @@ func TestSessionAuthentication(t *testing.T) {
 			wantAuthenticated: true,
 		},
 		{
+			name:              "authenticated info",
+			frame:             "INFO\r\n",
+			want:              "$8\r\nregiondb\r\n",
+			wantAuthenticated: true,
+		},
+		{
 			name:              "failed reauthentication clears state",
 			frame:             "AUTH wrong\r\n",
 			want:              "-ERR AUTH authentication failed\r\n",
@@ -174,6 +180,7 @@ func TestSessionEnforcesCommandArity(t *testing.T) {
 	frames := []string{
 		"AUTH\r\n",
 		"PING extra\r\n",
+		"INFO extra\r\n",
 		"GET 1\r\n",
 		"SET 1 2\r\n",
 		"EXISTS 1 2 3\r\n",
@@ -187,6 +194,51 @@ func TestSessionEnforcesCommandArity(t *testing.T) {
 	}
 	if session.Closed() {
 		t.Fatal("malformed QUIT closed the session")
+	}
+}
+
+func BenchmarkSessionCommands(b *testing.B) {
+	g := testGeometry(b)
+	store := &memoryStore{chunks: make(map[geometry.Coord]*storage.Chunk)}
+	chunk, err := storage.ChunkFromBytes(g, []byte{0x41, 0x04})
+	if err != nil {
+		b.Fatal(err)
+	}
+	store.chunks[geometry.Coord{X: 2, Y: -3}] = chunk
+	engine, err := NewEngine(g, store, "test-token")
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	benchmarks := []struct {
+		name  string
+		frame []byte
+		want  string
+	}{
+		{name: "PING", frame: []byte("PING\r\n"), want: "+OK PONG\r\n"},
+		{name: "INFO", frame: []byte("INFO\r\n"), want: "$8\r\nregiondb\r\n"},
+		{name: "CHUNK_text", frame: []byte("CHUNK 2 -3\r\n"), want: "$4\r\n4104\r\n"},
+		{name: "CHUNK_binary", frame: []byte("CHUNKBIN 2 -3\r\n"), want: "$2\r\n\x41\x04\r\n"},
+	}
+	for _, benchmark := range benchmarks {
+		b.Run(benchmark.name, func(b *testing.B) {
+			session := engine.NewSession()
+			if got := string(session.Handle([]byte("AUTH test-token\r\n")).Bytes()); got != "+OK\r\n" {
+				b.Fatalf("AUTH response = %q", got)
+			}
+			if got := string(session.Handle(benchmark.frame).Bytes()); got != benchmark.want {
+				b.Fatalf("warmup response = %q, want %q", got, benchmark.want)
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				response := session.Handle(benchmark.frame).Bytes()
+				if len(response) == 0 {
+					b.Fatal("empty response")
+				}
+			}
+		})
 	}
 }
 
@@ -260,7 +312,7 @@ func newTestSession(t *testing.T) *Session {
 	return engine.NewSession()
 }
 
-func testGeometry(t *testing.T) geometry.Geometry {
+func testGeometry(t testing.TB) geometry.Geometry {
 	t.Helper()
 	g, err := geometry.New(geometry.Config{ChunkEdge: 2, LargeChunkEdge: 2, BlockBits: 3})
 	if err != nil {

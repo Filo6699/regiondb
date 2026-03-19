@@ -52,6 +52,7 @@ fit the configured block width.
 |---|---|---|
 | `AUTH token` | `+OK` or `-ERR AUTH ...` | Authenticate the connection. |
 | `PING` | `+OK PONG` | Check an authenticated session. |
+| `INFO` | Bulk `regiondb` identifier | Identify the server implementation. |
 | `GET x y` | Bulk decimal value | Read a block; an absent chunk reads as zero. |
 | `SET x y value` | `+OK` | Persist one packed block value. |
 | `EXISTS x y` | `+OK 0` or `+OK 1` | Report whether the current block value is nonzero. |

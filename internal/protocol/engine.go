@@ -99,6 +99,11 @@ func (s *Session) Execute(command Command) Response {
 			return *response
 		}
 		return okResponse("PONG")
+	case "INFO":
+		if response := requireArity(command.Args, 0); response != nil {
+			return *response
+		}
+		return bulkResponse([]byte("regiondb"))
 	case "GET":
 		return s.get(command.Args)
 	case "SET":
