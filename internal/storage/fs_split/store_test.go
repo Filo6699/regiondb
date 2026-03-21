@@ -380,55 +380,213 @@ func TestStoreWALReopenDurabilityModes(t *testing.T) {
 	}
 }
 
-func TestStoreCrashRecoveryDiscardsTruncatedWALTail(t *testing.T) {
+func TestStoreCrashRecoveryDiscardsTruncatedWALRecord(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name   string
+		cutoff func([]byte) int
+	}{
+		{
+			name: "header",
+			cutoff: func([]byte) int {
+				return len(walMagic) / 2
+			},
+		},
+		{
+			name: "tail",
+			cutoff: func(record []byte) int {
+				return len(record) - 1
+			},
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			g := mustGeometry(t, geometry.Config{ChunkEdge: 2, LargeChunkEdge: 2, BlockBits: 2})
+			options := Options{CheckpointRecords: 8, CheckpointBytes: 1 << 20}
+			store := mustOpenWithOptions(t, root, g, options)
+			completeCoord := geometry.Coord{X: -2, Y: 3}
+			chunk := mustChunk(t, g)
+			if err := chunk.Set(geometry.Offset{}, 3); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.WriteChunk(completeCoord, chunk); err != nil {
+				t.Fatal(err)
+			}
+			partialCoord := geometry.Coord{X: 9, Y: 9}
+			partial := store.encodeWALRecord(partialCoord, mustChunk(t, g).Bytes())
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			wal, err := os.OpenFile(filepath.Join(root, walName), os.O_WRONLY|os.O_APPEND, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := wal.Write(partial[:test.cutoff(partial)]); err != nil {
+				_ = wal.Close()
+				t.Fatal(err)
+			}
+			if err := wal.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(store.chunkPath(completeCoord)); err != nil {
+				t.Fatal(err)
+			}
+
+			reopened := mustOpenWithOptions(t, root, g, options)
+			got, err := reopened.ReadChunk(completeCoord)
+			if err != nil {
+				t.Fatalf("ReadChunk() after truncated %s recovery: %v", test.name, err)
+			}
+			value, err := got.Get(geometry.Offset{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if value != 3 {
+				t.Fatalf("replayed value = %d, want 3", value)
+			}
+			if _, err := reopened.ReadChunk(partialCoord); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("partial record created a chunk: %v", err)
+			}
+			info, err := os.Stat(filepath.Join(root, walName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Size() != 0 {
+				t.Fatalf("recovered WAL size = %d, want 0", info.Size())
+			}
+		})
+	}
+}
+
+func TestStoreRecoveryRepeatedWALReplay(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	g := mustGeometry(t, geometry.Config{ChunkEdge: 2, LargeChunkEdge: 2, BlockBits: 2})
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 2, BlockBits: 4})
 	options := Options{CheckpointRecords: 8, CheckpointBytes: 1 << 20}
+	coord := geometry.Coord{X: -4, Y: 6}
 	store := mustOpenWithOptions(t, root, g, options)
-	coord := geometry.Coord{X: -2, Y: 3}
-	chunk := mustChunk(t, g)
-	if err := chunk.Set(geometry.Offset{}, 3); err != nil {
-		t.Fatal(err)
+	for _, value := range []uint64{5, 11} {
+		chunk := mustChunk(t, g)
+		if err := chunk.Set(geometry.Offset{}, value); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.WriteChunk(coord, chunk); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := store.WriteChunk(coord, chunk); err != nil {
-		t.Fatal(err)
-	}
-	partial := store.encodeWALRecord(geometry.Coord{X: 9, Y: 9}, mustChunk(t, g).Bytes())
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	wal, err := os.OpenFile(filepath.Join(root, walName), os.O_WRONLY|os.O_APPEND, 0)
+	walPath := filepath.Join(root, walName)
+	records, err := os.ReadFile(walPath)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := wal.Write(partial[:len(partial)/2]); err != nil {
-		_ = wal.Close()
-		t.Fatal(err)
-	}
-	if err := wal.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(filepath.Join(root, "l_n1_p1", "c_n2_p3.rdb")); err != nil {
 		t.Fatal(err)
 	}
 
-	reopened := mustOpenWithOptions(t, root, g, options)
-	defer closeStore(t, reopened)
-	got, err := reopened.ReadChunk(coord)
-	if err != nil {
-		t.Fatalf("ReadChunk() after truncated tail recovery: %v", err)
+	const replayCount = 3
+	for replay := 1; replay <= replayCount; replay++ {
+		if err := os.Remove(store.chunkPath(coord)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(walPath, records, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		reopened := mustOpenWithOptions(t, root, g, options)
+		got, err := reopened.ReadChunk(coord)
+		if err != nil {
+			t.Fatalf("replay %d ReadChunk(): %v", replay, err)
+		}
+		value, err := got.Get(geometry.Offset{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if value != 11 {
+			t.Fatalf("replay %d value = %d, want 11", replay, value)
+		}
+		info, err := os.Stat(walPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Size() != 0 {
+			t.Fatalf("replay %d WAL size = %d, want 0", replay, info.Size())
+		}
+		if err := reopened.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
-	value, err := got.Get(geometry.Offset{})
-	if err != nil {
-		t.Fatal(err)
+}
+
+func TestStoreLongWALCheckpointReopenCycles(t *testing.T) {
+	t.Parallel()
+
+	const (
+		checkpointRecords = 257
+		cycles            = 4
+	)
+	root := t.TempDir()
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 2, BlockBits: 16})
+	options := Options{
+		Durability:        DurabilityFsyncWAL,
+		CheckpointRecords: checkpointRecords,
+		CheckpointBytes:   1 << 20,
 	}
-	if value != 3 {
-		t.Fatalf("replayed value = %d, want 3", value)
-	}
-	if _, err := reopened.ReadChunk(geometry.Coord{X: 9, Y: 9}); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("partial record created a chunk: %v", err)
+	coord := geometry.Coord{X: 12, Y: -7}
+	recordBytes := int64(walHeaderBytes + g.PayloadBytes() + checksumSize)
+
+	for cycle := range cycles {
+		store := mustOpenWithOptions(t, root, g, options)
+		for write := range checkpointRecords {
+			chunk := mustChunk(t, g)
+			value := uint64(cycle*checkpointRecords + write + 1)
+			if err := chunk.Set(geometry.Offset{}, value); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.WriteChunk(coord, chunk); err != nil {
+				t.Fatalf("cycle %d write %d: %v", cycle, write, err)
+			}
+			if write == checkpointRecords-2 {
+				info, err := os.Stat(filepath.Join(root, walName))
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := int64(checkpointRecords-1) * recordBytes
+				if info.Size() != want {
+					t.Fatalf("cycle %d WAL size before checkpoint = %d, want %d", cycle, info.Size(), want)
+				}
+			}
+		}
+		info, err := os.Stat(filepath.Join(root, walName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Size() != 0 {
+			t.Fatalf("cycle %d WAL size after checkpoint = %d, want 0", cycle, info.Size())
+		}
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		reopened := mustOpenWithOptions(t, root, g, options)
+		got, err := reopened.ReadChunk(coord)
+		if err != nil {
+			t.Fatalf("cycle %d ReadChunk() after reopen: %v", cycle, err)
+		}
+		value, err := got.Get(geometry.Offset{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := uint64((cycle + 1) * checkpointRecords)
+		if value != want {
+			t.Fatalf("cycle %d value after reopen = %d, want %d", cycle, value, want)
+		}
+		if err := reopened.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
