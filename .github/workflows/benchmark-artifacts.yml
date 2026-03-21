@@ -84,6 +84,10 @@ jobs:
           printf '{\n  "git_sha": "%s",\n  "go_version": "%s",\n  "os": "%s",\n  "arch": "%s",\n  "flags": "%s",\n  "seed": %s,\n  "raw_output": "raw-output.json"\n}\n' \
             "$git_sha" "$go_version" "$go_os" "$go_arch" "$flags" "$BENCHMARK_SEED" \
             > "$artifact_dir/manifest.json"
+          (
+            cd "$artifact_dir"
+            sha256sum manifest.json raw-output.json > SHA256SUMS
+          )
 
       - name: Upload benchmark artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
