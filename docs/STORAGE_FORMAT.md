@@ -70,10 +70,13 @@ records for the configured geometry. Each record contains:
 | 36 | `payload_bytes` | Replacement packed chunk payload |
 | end - 4 | 4 | IEEE CRC-32 of every preceding byte |
 
-Opening a store validates and replays complete records in order. A final
-partial record is treated as an interrupted append and discarded. Invalid
-magic, geometry, reserved bytes, or checksum in a complete record fails
-closed with no replay.
+Opening a store validates and replays complete records in order. If multiple
+records replace the same chunk, the last complete record determines its
+contents. Replaying those replacement records again produces the same result.
+A final partial record is treated as an interrupted append and discarded,
+whether the interruption occurs in its header, payload, or checksum. Invalid
+magic, geometry, reserved bytes, or checksum in a complete record fails closed
+with no replay.
 
 ## Writes, checkpoints, and durability
 
