@@ -48,6 +48,10 @@ All integers use decimal ASCII input without a leading plus sign. Coordinates
 are signed 64-bit integers. Block values are unsigned 64-bit integers and must
 fit the configured block width.
 
+`GET`, `SET`, and `EXISTS` take world block coordinates. `CHUNK`, `CHUNKBIN`,
+and `CHUNKSET` take regular-chunk coordinates. These coordinate spaces are
+distinct; the [project terminology](TERMINOLOGY.md) defines their names.
+
 | Command | Response | Behavior |
 |---|---|---|
 | `AUTH token` | `+OK` or `-ERR AUTH ...` | Authenticate the connection. |

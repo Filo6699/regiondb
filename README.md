@@ -52,6 +52,7 @@ Connection URIs use `region://token@host:port/` for plaintext TCP and
 
 The current contracts are documented in:
 
+- [Terminology](docs/TERMINOLOGY.md)
 - [Protocol specification](docs/PROTOCOL.md)
 - [Storage format](docs/STORAGE_FORMAT.md)
 - [Concurrency model](docs/CONCURRENCY.md)
@@ -62,8 +63,8 @@ The current contracts are documented in:
 
 The repository provides direct `fs_split_v1` and TCP scenario benchmarks with
 seeded read, write, and mixed workloads. Both emit JSON latency percentiles and
-operation counts. Their results characterize the implemented chunk paths on a
-particular configuration and machine; they are not general database
+operation counts. Their results characterize the implemented regular-chunk
+paths on a particular configuration and machine; they are not general database
 performance claims or CI thresholds.
 
 ## Development

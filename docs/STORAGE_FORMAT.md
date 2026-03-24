@@ -4,6 +4,9 @@
 when the store opens and is repeated in every file so mismatched data is
 rejected.
 
+This document uses regular chunk, large chunk, block coordinate, and chunk
+coordinate as defined by the [project terminology](TERMINOLOGY.md).
+
 ## Coordinate mapping
 
 For a chunk coordinate `(x, y)`, floor division by `large_chunk_edge` selects

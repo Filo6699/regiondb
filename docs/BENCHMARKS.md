@@ -19,7 +19,8 @@ be positive and is bounded at 10,000,000 so exact percentile samples remain
 bounded. The supported workloads are `read`, `write`, and `mixed`; `mixed`
 selects approximately 80% reads and 20% writes. A seed determines the operation
 types, coordinates, and payload values. Read and mixed runs prepare a bounded
-working set before timing so their measured reads address existing chunks.
+working set of regular chunks before timing so their measured reads address
+existing chunks.
 
 The direct benchmark requires its own `-data-dir`. Its `-durability` setting
 selects one of the existing storage durability modes. The TCP benchmark uses
@@ -67,6 +68,7 @@ only prove that the scenarios complete and emit valid output; they do not
 enforce performance thresholds.
 
 regiondb is specialized chunk/grid storage for games and grid-based
-simulations. These scenarios characterize only the implemented chunk paths;
-they are not general database benchmarks and do not support broad database
-performance comparisons.
+simulations. These scenarios characterize only the implemented regular-chunk
+paths; they are not general database benchmarks and do not support broad
+database performance comparisons. Terms used here follow the
+[project terminology](TERMINOLOGY.md).
