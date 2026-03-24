@@ -67,6 +67,10 @@ hardware, operating system, and server configuration. Quick benchmark tests
 only prove that the scenarios complete and emit valid output; they do not
 enforce performance thresholds.
 
+The [measured baseline](benchmarks/measured-baseline-2026-07-30.md) records a
+specific local environment, command, commit, and raw artifact. It is suitable
+only as a reproducible point of reference under comparable conditions.
+
 regiondb is specialized chunk/grid storage for games and grid-based
 simulations. These scenarios characterize only the implemented regular-chunk
 paths; they are not general database benchmarks and do not support broad

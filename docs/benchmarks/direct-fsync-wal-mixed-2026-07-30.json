@@ -1,0 +1,1 @@
+{"backend":"direct","workload":"mixed","seed":42,"operations":10000,"working_set":1024,"reads":7962,"writes":2038,"duration_nanoseconds":58708719,"operations_per_second":170332.45096013762,"latency_nanoseconds":{"minimum":141,"p50":393,"p95":15279,"p99":22486,"maximum":22106960},"geometry":{"chunk_edge":16,"large_chunk_edge":8,"block_bits":5},"durability":"fsync-wal"}
