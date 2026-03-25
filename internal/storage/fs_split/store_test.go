@@ -521,6 +521,62 @@ func TestStoreRecoveryRepeatedWALReplay(t *testing.T) {
 	}
 }
 
+func TestStoreWALReplayInvalidatesReloadedChunk(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 2, BlockBits: 4})
+	store := mustOpenWithOptions(t, root, g, Options{
+		CheckpointRecords: 1,
+		CheckpointBytes:   1 << 20,
+		MaxLoadedChunks:   1,
+	})
+	replayedCoord := geometry.Coord{X: 3, Y: -4}
+	evictingCoord := geometry.Coord{X: 8, Y: 9}
+
+	for _, write := range []struct {
+		coord geometry.Coord
+		value uint64
+	}{
+		{coord: replayedCoord, value: 3},
+		{coord: evictingCoord, value: 7},
+	} {
+		chunk := mustChunk(t, g)
+		if err := chunk.Set(geometry.Offset{}, write.value); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.WriteChunk(write.coord, chunk); err != nil {
+			t.Fatalf("WriteChunk(%v): %v", write.coord, err)
+		}
+	}
+	if _, err := store.ReadChunk(replayedCoord); err != nil {
+		t.Fatalf("reload evicted chunk: %v", err)
+	}
+
+	replayed := mustChunk(t, g)
+	if err := replayed.Set(geometry.Offset{}, 11); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.appendWAL(store.encodeWALRecord(replayedCoord, replayed.Bytes())); err != nil {
+		t.Fatalf("append replay record: %v", err)
+	}
+	if err := store.recoverWAL(); err != nil {
+		t.Fatalf("recoverWAL(): %v", err)
+	}
+
+	got, err := store.ReadChunk(replayedCoord)
+	if err != nil {
+		t.Fatalf("ReadChunk() after replay: %v", err)
+	}
+	value, err := got.Get(geometry.Offset{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != 11 {
+		t.Fatalf("replayed value = %d, want 11", value)
+	}
+}
+
 func TestStoreLongWALCheckpointReopenCycles(t *testing.T) {
 	t.Parallel()
 

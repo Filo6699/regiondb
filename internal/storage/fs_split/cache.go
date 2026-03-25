@@ -71,3 +71,15 @@ func (cache *chunkCache) put(coord geometry.Coord, payload []byte) error {
 	}
 	return nil
 }
+
+func (cache *chunkCache) remove(coord geometry.Coord) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+
+	element, found := cache.entries[coord]
+	if !found {
+		return
+	}
+	delete(cache.entries, coord)
+	cache.recent.Remove(element)
+}

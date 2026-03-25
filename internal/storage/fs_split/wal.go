@@ -124,6 +124,9 @@ func (s *Store) scanWAL(visit func(walRecord) error) (int64, uint64, error) {
 }
 
 func (s *Store) recoverWAL() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	completeBytes, recordCount, err := s.scanWAL(func(walRecord) error {
 		return nil
 	})
@@ -135,6 +138,7 @@ func (s *Store) recoverWAL() error {
 		if err := s.persistChunk(record.coord, record.payload, syncData); err != nil {
 			return fmt.Errorf("replay WAL record: %w", err)
 		}
+		s.cache.remove(record.coord)
 		return nil
 	}); err != nil {
 		return fmt.Errorf("recover WAL: %w", err)
