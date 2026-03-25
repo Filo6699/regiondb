@@ -61,6 +61,7 @@ func TestParseConfig(t *testing.T) {
 		got.checkpointRecords != fs_split.DefaultCheckpointRecords ||
 		got.checkpointBytes != fs_split.DefaultCheckpointBytes ||
 		got.maxLoadedChunks != fs_split.DefaultMaxLoadedChunks ||
+		got.walGroupCommitUpdates != fs_split.DefaultWALGroupCommitUpdates ||
 		got.workers != server.DefaultOptions().Workers ||
 		got.acceptQueue != server.DefaultAcceptQueue ||
 		got.maxLineBytes != server.DefaultMaxLineBytes {
@@ -126,6 +127,7 @@ func TestParseConfigStorageOptions(t *testing.T) {
 		"-checkpoint-records", "7",
 		"-checkpoint-bytes", "4096",
 		"-max-loaded-chunks", "3",
+		"-wal-group-commit-updates", "5",
 		"-workers", "2",
 		"-accept-queue", "4",
 		"-max-line-bytes", "8192",
@@ -136,7 +138,7 @@ func TestParseConfigStorageOptions(t *testing.T) {
 	}
 	if got.durability != fs_split.DurabilityFsyncWAL ||
 		got.checkpointRecords != 7 || got.checkpointBytes != 4096 ||
-		got.maxLoadedChunks != 3 || got.workers != 2 ||
+		got.maxLoadedChunks != 3 || got.walGroupCommitUpdates != 5 || got.workers != 2 ||
 		got.acceptQueue != 4 || got.maxLineBytes != 8192 {
 		t.Fatalf("parseConfig() options = %+v", got)
 	}
@@ -146,6 +148,7 @@ func TestParseConfigStorageOptions(t *testing.T) {
 		{"-checkpoint-records", "0"},
 		{"-checkpoint-bytes", "0"},
 		{"-max-loaded-chunks", "0"},
+		{"-wal-group-commit-updates", "0"},
 		{"-workers", "0"},
 		{"-accept-queue", "-1"},
 		{"-max-line-bytes", "0"},

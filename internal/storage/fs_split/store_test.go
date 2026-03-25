@@ -697,6 +697,65 @@ func TestStoreCheckpointsWALThresholds(t *testing.T) {
 	}
 }
 
+func TestStoreWALGroupCommitUpdates(t *testing.T) {
+	t.Parallel()
+
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 4})
+	store := mustOpenWithOptions(t, t.TempDir(), g, Options{
+		Durability:            DurabilityFsyncWAL,
+		CheckpointRecords:     8,
+		CheckpointBytes:       1 << 20,
+		WALGroupCommitUpdates: 3,
+	})
+	coord := geometry.Coord{}
+
+	for update := uint64(1); update <= 4; update++ {
+		chunk := mustChunk(t, g)
+		if err := chunk.Set(geometry.Offset{}, update); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.WriteChunk(coord, chunk); err != nil {
+			t.Fatalf("WriteChunk(%d): %v", update, err)
+		}
+		wantPending := update % 3
+		if store.walUnsyncedUpdates != wantPending {
+			t.Fatalf(
+				"update %d pending WAL sync count = %d, want %d",
+				update,
+				store.walUnsyncedUpdates,
+				wantPending,
+			)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close(): %v", err)
+	}
+	if store.walUnsyncedUpdates != 0 {
+		t.Fatalf("pending WAL sync count after close = %d, want 0", store.walUnsyncedUpdates)
+	}
+	if err := os.Remove(store.chunkPath(coord)); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened := mustOpenWithOptions(t, store.root, g, Options{
+		Durability:            DurabilityFsyncWAL,
+		CheckpointRecords:     8,
+		CheckpointBytes:       1 << 20,
+		WALGroupCommitUpdates: 3,
+	})
+	got, err := reopened.ReadChunk(coord)
+	if err != nil {
+		t.Fatalf("ReadChunk() after grouped WAL replay: %v", err)
+	}
+	value, err := got.Get(geometry.Offset{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != 4 {
+		t.Fatalf("replayed grouped value = %d, want 4", value)
+	}
+}
+
 func TestOpenRejectsInvalidOptions(t *testing.T) {
 	t.Parallel()
 

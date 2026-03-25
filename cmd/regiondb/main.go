@@ -31,20 +31,21 @@ func main() {
 }
 
 type config struct {
-	listenAddress     string
-	dataDir           string
-	token             string
-	tlsCert           string
-	tlsKey            string
-	durability        fs_split.DurabilityMode
-	checkpointRecords uint64
-	checkpointBytes   int64
-	maxLoadedChunks   int
-	workers           int
-	acceptQueue       int
-	maxLineBytes      int
-	geometry          geometry.Config
-	version           bool
+	listenAddress         string
+	dataDir               string
+	token                 string
+	tlsCert               string
+	tlsKey                string
+	durability            fs_split.DurabilityMode
+	checkpointRecords     uint64
+	checkpointBytes       int64
+	maxLoadedChunks       int
+	walGroupCommitUpdates uint64
+	workers               int
+	acceptQueue           int
+	maxLineBytes          int
+	geometry              geometry.Config
+	version               bool
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnErr error) {
@@ -66,10 +67,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnEr
 		return fmt.Errorf("configure geometry: %w", err)
 	}
 	store, err := fs_split.OpenWithOptions(config.dataDir, g, fs_split.Options{
-		Durability:        config.durability,
-		CheckpointRecords: config.checkpointRecords,
-		CheckpointBytes:   config.checkpointBytes,
-		MaxLoadedChunks:   config.maxLoadedChunks,
+		Durability:            config.durability,
+		CheckpointRecords:     config.checkpointRecords,
+		CheckpointBytes:       config.checkpointBytes,
+		MaxLoadedChunks:       config.maxLoadedChunks,
+		WALGroupCommitUpdates: config.walGroupCommitUpdates,
 	})
 	if err != nil {
 		return fmt.Errorf("open chunk store: %w", err)
@@ -132,6 +134,12 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	flags.Uint64Var(&result.checkpointRecords, "checkpoint-records", fs_split.DefaultCheckpointRecords, "WAL records between checkpoints")
 	flags.Int64Var(&result.checkpointBytes, "checkpoint-bytes", fs_split.DefaultCheckpointBytes, "WAL bytes between checkpoints")
 	flags.IntVar(&result.maxLoadedChunks, "max-loaded-chunks", fs_split.DefaultMaxLoadedChunks, "maximum chunks retained in memory")
+	flags.Uint64Var(
+		&result.walGroupCommitUpdates,
+		"wal-group-commit-updates",
+		fs_split.DefaultWALGroupCommitUpdates,
+		"WAL updates per sync",
+	)
 	runtimeDefaults := server.DefaultOptions()
 	flags.IntVar(&result.workers, "workers", runtimeDefaults.Workers, "number of connection workers")
 	flags.IntVar(&result.acceptQueue, "accept-queue", runtimeDefaults.AcceptQueue, "maximum queued connections")
@@ -175,6 +183,9 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	}
 	if result.maxLoadedChunks <= 0 {
 		return config{}, errors.New("-max-loaded-chunks must be positive")
+	}
+	if result.walGroupCommitUpdates == 0 {
+		return config{}, errors.New("-wal-group-commit-updates must be positive")
 	}
 	if result.workers <= 0 {
 		return config{}, errors.New("-workers must be positive")

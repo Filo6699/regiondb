@@ -160,8 +160,10 @@ func serveConnection(connection net.Conn, engine *protocol.Engine, maxLineBytes 
 	reader := bufio.NewReaderSize(connection, maxLineBytes+1)
 	writer := bufio.NewWriter(connection)
 	session := engine.NewSession()
+	var frameBuffer []byte
 	for {
-		frame, tooLong, err := readFrame(reader, maxLineBytes)
+		frame, tooLong, err := readFrame(reader, maxLineBytes, frameBuffer[:0])
+		frameBuffer = frame
 		if tooLong {
 			if writeErr := writeResponse(writer, []byte("-ERR FRAME command exceeds max_line_bytes\r\n")); writeErr != nil {
 				return
@@ -189,15 +191,14 @@ func serveConnection(connection net.Conn, engine *protocol.Engine, maxLineBytes 
 	}
 }
 
-func readFrame(reader *bufio.Reader, maxLineBytes int) ([]byte, bool, error) {
-	var frame []byte
+func readFrame(reader *bufio.Reader, maxLineBytes int, frame []byte) ([]byte, bool, error) {
 	for {
 		fragment, err := reader.ReadSlice('\n')
 		if len(frame) > maxLineBytes-len(fragment) {
 			for errors.Is(err, bufio.ErrBufferFull) {
 				_, err = reader.ReadSlice('\n')
 			}
-			return nil, true, err
+			return frame[:0], true, err
 		}
 		frame = append(frame, fragment...)
 		if !errors.Is(err, bufio.ErrBufferFull) {

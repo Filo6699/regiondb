@@ -29,6 +29,8 @@ type Session struct {
 	engine        *Engine
 	authenticated bool
 	closed        bool
+	commandArgs   []string
+	handleMu      sync.Mutex
 }
 
 func NewEngine(g geometry.Geometry, store ChunkStore, token string) (*Engine, error) {
@@ -51,7 +53,10 @@ func NewEngine(g geometry.Geometry, store ChunkStore, token string) (*Engine, er
 }
 
 func (e *Engine) NewSession() *Session {
-	return &Session{engine: e}
+	return &Session{
+		engine:      e,
+		commandArgs: make([]string, 0, 4),
+	}
 }
 
 func (s *Session) Authenticated() bool {
@@ -63,13 +68,17 @@ func (s *Session) Closed() bool {
 }
 
 func (s *Session) Handle(frame []byte) Response {
+	s.handleMu.Lock()
+	defer s.handleMu.Unlock()
+
 	if s.closed {
 		return errorResponse("CLOSED", "session is closed")
 	}
-	command, err := ParseFrame(frame)
+	command, err := parseFrame(frame, s.commandArgs)
 	if err != nil {
 		return errorResponse("FRAME", err.Error())
 	}
+	s.commandArgs = command.Args[:0]
 	return s.Execute(command)
 }
 

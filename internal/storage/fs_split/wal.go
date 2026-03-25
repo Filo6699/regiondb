@@ -32,16 +32,34 @@ func (s *Store) appendWAL(record []byte) error {
 		return fmt.Errorf("append WAL: %w", err)
 	}
 	if s.options.Durability == DurabilityFsyncWAL {
-		if err := s.wal.Sync(); err != nil {
-			return fmt.Errorf("sync WAL: %w", err)
+		s.walUnsyncedUpdates++
+		if s.walUnsyncedUpdates >= s.options.WALGroupCommitUpdates {
+			if err := s.syncWAL(); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
+func (s *Store) syncWAL() error {
+	if err := s.wal.Sync(); err != nil {
+		return fmt.Errorf("sync WAL: %w", err)
+	}
+	s.walUnsyncedUpdates = 0
+	return nil
+}
+
 func (s *Store) encodeWALRecord(coord geometry.Coord, payload []byte) []byte {
+	return s.appendWALRecord(nil, coord, payload)
+}
+
+func (s *Store) appendWALRecord(encoded []byte, coord geometry.Coord, payload []byte) []byte {
 	config := s.geometry.Config()
-	encoded := make([]byte, 0, walHeaderBytes+len(payload)+checksumSize)
+	recordBytes := walHeaderBytes + len(payload) + checksumSize
+	if cap(encoded) < recordBytes {
+		encoded = make([]byte, 0, recordBytes)
+	}
 	encoded = append(encoded, walMagic...)
 	encoded = bitcodec.AppendUint32(encoded, config.ChunkEdge)
 	encoded = bitcodec.AppendUint32(encoded, config.LargeChunkEdge)
@@ -197,5 +215,6 @@ func (s *Store) clearWAL(syncData bool) error {
 			return fmt.Errorf("sync truncated WAL: %w", err)
 		}
 	}
+	s.walUnsyncedUpdates = 0
 	return nil
 }

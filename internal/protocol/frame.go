@@ -3,7 +3,6 @@ package protocol
 import (
 	"errors"
 	"fmt"
-	"strings"
 )
 
 var ErrInvalidFrame = errors.New("invalid command frame")
@@ -14,6 +13,10 @@ type Command struct {
 }
 
 func ParseFrame(frame []byte) (Command, error) {
+	return parseFrame(frame, nil)
+}
+
+func parseFrame(frame []byte, scratch []string) (Command, error) {
 	if len(frame) < 3 || frame[len(frame)-2] != '\r' || frame[len(frame)-1] != '\n' {
 		return Command{}, fmt.Errorf("%w: command must end with CRLF", ErrInvalidFrame)
 	}
@@ -31,17 +34,40 @@ func ParseFrame(frame []byte) (Command, error) {
 		}
 	}
 
-	parts := strings.Split(string(line), " ")
-	for _, part := range parts {
-		if part == "" {
-			return Command{}, fmt.Errorf("%w: tokens must use single spaces", ErrInvalidFrame)
+	nameEnd := len(line)
+	for index, character := range line {
+		if character == ' ' {
+			nameEnd = index
+			break
 		}
 	}
-	for _, character := range parts[0] {
+	if nameEnd == 0 {
+		return Command{}, fmt.Errorf("%w: tokens must use single spaces", ErrInvalidFrame)
+	}
+	for _, character := range line[:nameEnd] {
 		if character < 'A' || character > 'Z' {
 			return Command{}, fmt.Errorf("%w: command name must be uppercase ASCII", ErrInvalidFrame)
 		}
 	}
 
-	return Command{Name: parts[0], Args: parts[1:]}, nil
+	text := string(line)
+	args := scratch[:0]
+	for start := nameEnd + 1; start <= len(line); {
+		end := start
+		for end < len(line) && line[end] != ' ' {
+			end++
+		}
+		if end == start {
+			return Command{}, fmt.Errorf("%w: tokens must use single spaces", ErrInvalidFrame)
+		}
+		args = append(args, text[start:end])
+		if end == len(line) {
+			break
+		}
+		start = end + 1
+	}
+	if args == nil {
+		args = []string{}
+	}
+	return Command{Name: text[:nameEnd], Args: args}, nil
 }

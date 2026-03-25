@@ -6,9 +6,10 @@ import (
 )
 
 const (
-	DefaultCheckpointRecords = 1024
-	DefaultCheckpointBytes   = 64 << 20
-	DefaultMaxLoadedChunks   = 1024
+	DefaultCheckpointRecords     = 1024
+	DefaultCheckpointBytes       = 64 << 20
+	DefaultMaxLoadedChunks       = 1024
+	DefaultWALGroupCommitUpdates = 1
 )
 
 type DurabilityMode string
@@ -20,10 +21,11 @@ const (
 )
 
 type Options struct {
-	Durability        DurabilityMode
-	CheckpointRecords uint64
-	CheckpointBytes   int64
-	MaxLoadedChunks   int
+	Durability            DurabilityMode
+	CheckpointRecords     uint64
+	CheckpointBytes       int64
+	MaxLoadedChunks       int
+	WALGroupCommitUpdates uint64
 }
 
 func (options Options) validated() (Options, error) {
@@ -49,6 +51,9 @@ func (options Options) validated() (Options, error) {
 	}
 	if options.MaxLoadedChunks < 0 {
 		return Options{}, errors.New("maximum loaded chunks must be positive")
+	}
+	if options.WALGroupCommitUpdates == 0 {
+		options.WALGroupCommitUpdates = DefaultWALGroupCommitUpdates
 	}
 	return options, nil
 }

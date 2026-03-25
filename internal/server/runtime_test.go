@@ -262,6 +262,22 @@ func TestServeOptionsValidation(t *testing.T) {
 	}
 }
 
+func BenchmarkReadFrameReuse(b *testing.B) {
+	const frame = "SET -12 34 7\r\n"
+	reader := bufio.NewReaderSize(&repeatingReader{data: []byte(frame)}, 64)
+	buffer := make([]byte, 0, len(frame))
+
+	b.ReportAllocs()
+	for range b.N {
+		var tooLong bool
+		var err error
+		buffer, tooLong, err = readFrame(reader, len(frame), buffer[:0])
+		if err != nil || tooLong || len(buffer) != len(frame) {
+			b.Fatalf("readFrame() = (%q, %t, %v)", buffer, tooLong, err)
+		}
+	}
+}
+
 func newTestEngine(t *testing.T) *protocol.Engine {
 	t.Helper()
 
@@ -331,3 +347,19 @@ type testAddress string
 
 func (a testAddress) Network() string { return string(a) }
 func (a testAddress) String() string  { return string(a) }
+
+type repeatingReader struct {
+	data   []byte
+	offset int
+}
+
+func (r *repeatingReader) Read(destination []byte) (int, error) {
+	for index := range destination {
+		destination[index] = r.data[r.offset]
+		r.offset++
+		if r.offset == len(r.data) {
+			r.offset = 0
+		}
+	}
+	return len(destination), nil
+}

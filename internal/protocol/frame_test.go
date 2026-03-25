@@ -57,6 +57,20 @@ func TestParseFrame(t *testing.T) {
 	}
 }
 
+func BenchmarkParseFrameReuse(b *testing.B) {
+	frame := []byte("SET -12 34 7\r\n")
+	scratch := make([]string, 0, 4)
+
+	b.ReportAllocs()
+	for range b.N {
+		command, err := parseFrame(frame, scratch[:0])
+		if err != nil {
+			b.Fatal(err)
+		}
+		scratch = command.Args
+	}
+}
+
 func TestResponseFraming(t *testing.T) {
 	t.Parallel()
 

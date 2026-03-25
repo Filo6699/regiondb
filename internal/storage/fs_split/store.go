@@ -28,15 +28,17 @@ var (
 )
 
 type Store struct {
-	root       string
-	geometry   geometry.Geometry
-	options    Options
-	wal        *os.File
-	writerLock *writerLock
-	cache      *chunkCache
-	walRecords uint64
-	walBytes   int64
-	mu         sync.RWMutex
+	root               string
+	geometry           geometry.Geometry
+	options            Options
+	wal                *os.File
+	writerLock         *writerLock
+	cache              *chunkCache
+	walRecords         uint64
+	walBytes           int64
+	walUnsyncedUpdates uint64
+	walRecordBuffer    []byte
+	mu                 sync.RWMutex
 }
 
 func Open(root string, g geometry.Geometry) (*Store, error) {
@@ -109,6 +111,11 @@ func (s *Store) Close() error {
 	}
 	var result error
 	if s.wal != nil {
+		if s.options.Durability == DurabilityFsyncWAL && s.walUnsyncedUpdates != 0 {
+			if err := s.syncWAL(); err != nil {
+				result = errors.Join(result, err)
+			}
+		}
 		if err := s.wal.Close(); err != nil {
 			result = errors.Join(result, fmt.Errorf("close WAL: %w", err))
 		}
@@ -133,15 +140,16 @@ func (s *Store) WriteChunk(coord geometry.Coord, chunk *storage.Chunk) error {
 	if chunk.Geometry() != s.geometry {
 		return ErrGeometryMismatch
 	}
-
-	payload := chunk.Bytes()
-	record := s.encodeWALRecord(coord, payload)
 	if s.wal == nil {
 		return errors.New("write chunk: store is closed")
 	}
+
+	payload := chunk.Bytes()
+	record := s.appendWALRecord(s.walRecordBuffer[:0], coord, payload)
 	if err := s.appendWAL(record); err != nil {
 		return err
 	}
+	s.walRecordBuffer = record[:0]
 	syncCheckpoint := s.options.Durability == DurabilityFsyncCheckpoint
 	if err := s.persistChunk(coord, payload, syncCheckpoint); err != nil {
 		return fmt.Errorf("persist chunk: %w", err)
