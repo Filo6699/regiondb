@@ -94,9 +94,14 @@ before truncating and synchronizing the WAL.
 
 - `relaxed` acknowledges after the WAL append and atomic chunk replacement
   without calling `fsync`.
-- `fsync-wal` synchronizes the WAL record before replacing the chunk and
-  acknowledging the write. Recovery can reconstruct an unsynchronized chunk
-  replacement.
+- `fsync-wal` with `wal_group_commit_updates=1` synchronizes each WAL record
+  before replacing the chunk and acknowledging the write. With a value of
+  `N > 1`, each write is acknowledged after append and chunk replacement, but
+  the WAL is synchronized only every Nth update and during orderly close. The
+  batching window can therefore contain up to `N-1` acknowledged updates
+  beyond the last successful WAL sync. Recovery can reconstruct an
+  unsynchronized chunk replacement when the appended WAL bytes persist, but a
+  process exit is not equivalent to power-loss durability.
 - `fsync-checkpoint` synchronizes the temporary chunk and its parent directory
   before acknowledging the write. WAL truncation is also synchronized.
 

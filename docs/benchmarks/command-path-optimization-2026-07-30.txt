@@ -1,0 +1,137 @@
+regiondb command-path optimization benchmark
+measurement_date=2026-07-30
+hardware=11th Gen Intel(R) Core(TM) i5-11300H @ 3.10GHz
+os=Arch Linux, Linux 6.18.9-arch1-2
+go=go1.24.13 linux/amd64
+
+before_commit=6f1e62ed0c7be359e9ca0a335e9819d70c00e138
+command=go test -run '^$' -bench '^BenchmarkSessionCommands$' -benchmem -count=10 ./internal/protocol
+goos: linux
+goarch: amd64
+pkg: github.com/Filo6699/regiondb/internal/protocol
+cpu: 11th Gen Intel(R) Core(TM) i5-11300H @ 3.10GHz
+BenchmarkSessionCommands/PING-8         	14287046	       105.3 ns/op	      48 B/op	       4 allocs/op
+BenchmarkSessionCommands/PING-8         	11945688	       104.8 ns/op	      48 B/op	       4 allocs/op
+BenchmarkSessionCommands/PING-8         	11664624	       104.7 ns/op	      48 B/op	       4 allocs/op
+BenchmarkSessionCommands/PING-8         	12010814	       114.6 ns/op	      48 B/op	       4 allocs/op
+BenchmarkSessionCommands/PING-8         	 9285960	       118.2 ns/op	      48 B/op	       4 allocs/op
+BenchmarkSessionCommands/PING-8         	10444866	       111.3 ns/op	      48 B/op	       4 allocs/op
+BenchmarkSessionCommands/PING-8         	11082506	       102.8 ns/op	      48 B/op	       4 allocs/op
+BenchmarkSessionCommands/PING-8         	11309713	       105.0 ns/op	      48 B/op	       4 allocs/op
+BenchmarkSessionCommands/PING-8         	10285447	        97.99 ns/op	      48 B/op	       4 allocs/op
+BenchmarkSessionCommands/PING-8         	11904511	       104.3 ns/op	      48 B/op	       4 allocs/op
+BenchmarkSessionCommands/INFO-8         	11581444	       114.5 ns/op	      48 B/op	       4 allocs/op
+BenchmarkSessionCommands/INFO-8         	10270256	       117.4 ns/op	      48 B/op	       4 allocs/op
+BenchmarkSessionCommands/INFO-8         	11448696	       117.2 ns/op	      48 B/op	       4 allocs/op
+BenchmarkSessionCommands/INFO-8         	 9051753	       112.2 ns/op	      48 B/op	       4 allocs/op
+BenchmarkSessionCommands/INFO-8         	12470734	       106.9 ns/op	      48 B/op	       4 allocs/op
+BenchmarkSessionCommands/INFO-8         	 9699211	       113.9 ns/op	      48 B/op	       4 allocs/op
+BenchmarkSessionCommands/INFO-8         	10713897	       112.2 ns/op	      48 B/op	       4 allocs/op
+BenchmarkSessionCommands/INFO-8         	10586338	       116.1 ns/op	      48 B/op	       4 allocs/op
+BenchmarkSessionCommands/INFO-8         	 9759555	       111.7 ns/op	      48 B/op	       4 allocs/op
+BenchmarkSessionCommands/INFO-8         	12188738	       109.4 ns/op	      48 B/op	       4 allocs/op
+BenchmarkSessionCommands/CHUNK_text-8   	 3423320	       333.5 ns/op	     184 B/op	       9 allocs/op
+BenchmarkSessionCommands/CHUNK_text-8   	 3663040	       349.9 ns/op	     184 B/op	       9 allocs/op
+BenchmarkSessionCommands/CHUNK_text-8   	 3722505	       357.4 ns/op	     184 B/op	       9 allocs/op
+BenchmarkSessionCommands/CHUNK_text-8   	 3492858	       351.6 ns/op	     184 B/op	       9 allocs/op
+BenchmarkSessionCommands/CHUNK_text-8   	 3122751	       383.7 ns/op	     184 B/op	       9 allocs/op
+BenchmarkSessionCommands/CHUNK_text-8   	 3586970	       370.1 ns/op	     184 B/op	       9 allocs/op
+BenchmarkSessionCommands/CHUNK_text-8   	 3410066	       362.8 ns/op	     184 B/op	       9 allocs/op
+BenchmarkSessionCommands/CHUNK_text-8   	 3055309	       383.6 ns/op	     184 B/op	       9 allocs/op
+BenchmarkSessionCommands/CHUNK_text-8   	 3528042	       367.9 ns/op	     184 B/op	       9 allocs/op
+BenchmarkSessionCommands/CHUNK_text-8   	 3429369	       390.8 ns/op	     184 B/op	       9 allocs/op
+BenchmarkSessionCommands/CHUNK_binary-8 	 3159199	       342.2 ns/op	     168 B/op	       8 allocs/op
+BenchmarkSessionCommands/CHUNK_binary-8 	 3662320	       331.2 ns/op	     168 B/op	       8 allocs/op
+BenchmarkSessionCommands/CHUNK_binary-8 	 2922723	       346.4 ns/op	     168 B/op	       8 allocs/op
+BenchmarkSessionCommands/CHUNK_binary-8 	 3529170	       347.1 ns/op	     168 B/op	       8 allocs/op
+BenchmarkSessionCommands/CHUNK_binary-8 	 3454045	       342.7 ns/op	     168 B/op	       8 allocs/op
+BenchmarkSessionCommands/CHUNK_binary-8 	 3470614	       349.0 ns/op	     168 B/op	       8 allocs/op
+BenchmarkSessionCommands/CHUNK_binary-8 	 3815794	       331.2 ns/op	     168 B/op	       8 allocs/op
+BenchmarkSessionCommands/CHUNK_binary-8 	 3331809	       326.8 ns/op	     168 B/op	       8 allocs/op
+BenchmarkSessionCommands/CHUNK_binary-8 	 3493132	       352.6 ns/op	     168 B/op	       8 allocs/op
+BenchmarkSessionCommands/CHUNK_binary-8 	 3545884	       321.7 ns/op	     168 B/op	       8 allocs/op
+PASS
+
+after_commit=4b3681e90281fe39306347cc4ab468480749d5eb
+command=go test -run '^$' -bench '^BenchmarkSessionCommands$' -benchmem -count=10 ./internal/protocol
+goos: linux
+goarch: amd64
+pkg: github.com/Filo6699/regiondb/internal/protocol
+cpu: 11th Gen Intel(R) Core(TM) i5-11300H @ 3.10GHz
+BenchmarkSessionCommands/PING-8         	13995861	        79.21 ns/op	      32 B/op	       3 allocs/op
+BenchmarkSessionCommands/PING-8         	15507993	        75.23 ns/op	      32 B/op	       3 allocs/op
+BenchmarkSessionCommands/PING-8         	14332723	        79.10 ns/op	      32 B/op	       3 allocs/op
+BenchmarkSessionCommands/PING-8         	14649580	        81.76 ns/op	      32 B/op	       3 allocs/op
+BenchmarkSessionCommands/PING-8         	15250214	        76.79 ns/op	      32 B/op	       3 allocs/op
+BenchmarkSessionCommands/PING-8         	16112406	        79.86 ns/op	      32 B/op	       3 allocs/op
+BenchmarkSessionCommands/PING-8         	14778433	        79.76 ns/op	      32 B/op	       3 allocs/op
+BenchmarkSessionCommands/PING-8         	17077977	        86.70 ns/op	      32 B/op	       3 allocs/op
+BenchmarkSessionCommands/PING-8         	12432096	        84.61 ns/op	      32 B/op	       3 allocs/op
+BenchmarkSessionCommands/PING-8         	17977516	        75.72 ns/op	      32 B/op	       3 allocs/op
+BenchmarkSessionCommands/INFO-8         	14456860	        81.01 ns/op	      32 B/op	       3 allocs/op
+BenchmarkSessionCommands/INFO-8         	13154498	        79.18 ns/op	      32 B/op	       3 allocs/op
+BenchmarkSessionCommands/INFO-8         	16081705	        79.49 ns/op	      32 B/op	       3 allocs/op
+BenchmarkSessionCommands/INFO-8         	13340701	        82.09 ns/op	      32 B/op	       3 allocs/op
+BenchmarkSessionCommands/INFO-8         	14387340	        81.53 ns/op	      32 B/op	       3 allocs/op
+BenchmarkSessionCommands/INFO-8         	14544476	        78.41 ns/op	      32 B/op	       3 allocs/op
+BenchmarkSessionCommands/INFO-8         	13806986	        82.28 ns/op	      32 B/op	       3 allocs/op
+BenchmarkSessionCommands/INFO-8         	13792674	        83.38 ns/op	      32 B/op	       3 allocs/op
+BenchmarkSessionCommands/INFO-8         	17215608	        86.53 ns/op	      32 B/op	       3 allocs/op
+BenchmarkSessionCommands/INFO-8         	11380982	        94.88 ns/op	      32 B/op	       3 allocs/op
+BenchmarkSessionCommands/CHUNK_text-8   	 4221063	       303.3 ns/op	     136 B/op	       8 allocs/op
+BenchmarkSessionCommands/CHUNK_text-8   	 3602637	       302.5 ns/op	     136 B/op	       8 allocs/op
+BenchmarkSessionCommands/CHUNK_text-8   	 4150564	       299.0 ns/op	     136 B/op	       8 allocs/op
+BenchmarkSessionCommands/CHUNK_text-8   	 3879280	       296.5 ns/op	     136 B/op	       8 allocs/op
+BenchmarkSessionCommands/CHUNK_text-8   	 4128703	       305.0 ns/op	     136 B/op	       8 allocs/op
+BenchmarkSessionCommands/CHUNK_text-8   	 4243810	       295.2 ns/op	     136 B/op	       8 allocs/op
+BenchmarkSessionCommands/CHUNK_text-8   	 3749677	       297.8 ns/op	     136 B/op	       8 allocs/op
+BenchmarkSessionCommands/CHUNK_text-8   	 4204464	       310.5 ns/op	     136 B/op	       8 allocs/op
+BenchmarkSessionCommands/CHUNK_text-8   	 3924583	       313.7 ns/op	     136 B/op	       8 allocs/op
+BenchmarkSessionCommands/CHUNK_text-8   	 3782229	       306.7 ns/op	     136 B/op	       8 allocs/op
+BenchmarkSessionCommands/CHUNK_binary-8 	 4208094	       281.9 ns/op	     120 B/op	       7 allocs/op
+BenchmarkSessionCommands/CHUNK_binary-8 	 3582025	       292.4 ns/op	     120 B/op	       7 allocs/op
+BenchmarkSessionCommands/CHUNK_binary-8 	 4382930	       281.6 ns/op	     120 B/op	       7 allocs/op
+BenchmarkSessionCommands/CHUNK_binary-8 	 4127634	       284.6 ns/op	     120 B/op	       7 allocs/op
+BenchmarkSessionCommands/CHUNK_binary-8 	 4888214	       284.3 ns/op	     120 B/op	       7 allocs/op
+BenchmarkSessionCommands/CHUNK_binary-8 	 4753230	       273.0 ns/op	     120 B/op	       7 allocs/op
+BenchmarkSessionCommands/CHUNK_binary-8 	 3807385	       273.2 ns/op	     120 B/op	       7 allocs/op
+BenchmarkSessionCommands/CHUNK_binary-8 	 4732944	       276.7 ns/op	     120 B/op	       7 allocs/op
+BenchmarkSessionCommands/CHUNK_binary-8 	 4341066	       268.7 ns/op	     120 B/op	       7 allocs/op
+BenchmarkSessionCommands/CHUNK_binary-8 	 4340276	       277.1 ns/op	     120 B/op	       7 allocs/op
+PASS
+
+after_commit=4b3681e90281fe39306347cc4ab468480749d5eb
+command=go test -run '^$' -bench '^BenchmarkParseFrameReuse$' -benchmem -count=10 ./internal/protocol
+goos: linux
+goarch: amd64
+pkg: github.com/Filo6699/regiondb/internal/protocol
+cpu: 11th Gen Intel(R) Core(TM) i5-11300H @ 3.10GHz
+BenchmarkParseFrameReuse-8   	23302381	        49.19 ns/op	      16 B/op	       1 allocs/op
+BenchmarkParseFrameReuse-8   	26269776	        47.72 ns/op	      16 B/op	       1 allocs/op
+BenchmarkParseFrameReuse-8   	25209664	        46.78 ns/op	      16 B/op	       1 allocs/op
+BenchmarkParseFrameReuse-8   	23531904	        47.10 ns/op	      16 B/op	       1 allocs/op
+BenchmarkParseFrameReuse-8   	24794620	        49.69 ns/op	      16 B/op	       1 allocs/op
+BenchmarkParseFrameReuse-8   	24041995	        51.06 ns/op	      16 B/op	       1 allocs/op
+BenchmarkParseFrameReuse-8   	24199110	        45.76 ns/op	      16 B/op	       1 allocs/op
+BenchmarkParseFrameReuse-8   	29908660	        48.24 ns/op	      16 B/op	       1 allocs/op
+BenchmarkParseFrameReuse-8   	24584724	        45.50 ns/op	      16 B/op	       1 allocs/op
+BenchmarkParseFrameReuse-8   	27042793	        46.85 ns/op	      16 B/op	       1 allocs/op
+PASS
+
+after_commit=4b3681e90281fe39306347cc4ab468480749d5eb
+command=go test -run '^$' -bench '^BenchmarkReadFrameReuse$' -benchmem -count=10 ./internal/server
+goos: linux
+goarch: amd64
+pkg: github.com/Filo6699/regiondb/internal/server
+cpu: 11th Gen Intel(R) Core(TM) i5-11300H @ 3.10GHz
+BenchmarkReadFrameReuse-8   	31757862	        32.70 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadFrameReuse-8   	39578826	        31.01 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadFrameReuse-8   	36532989	        32.29 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadFrameReuse-8   	32510162	        31.20 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadFrameReuse-8   	40136190	        32.88 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadFrameReuse-8   	31167895	        32.57 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadFrameReuse-8   	37370859	        32.67 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadFrameReuse-8   	34776645	        31.71 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadFrameReuse-8   	40194282	        31.20 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadFrameReuse-8   	36101613	        32.69 ns/op	       0 B/op	       0 allocs/op
+PASS

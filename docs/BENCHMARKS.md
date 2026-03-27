@@ -70,6 +70,9 @@ enforce performance thresholds.
 The [measured baseline](benchmarks/measured-baseline-2026-07-30.md) records a
 specific local environment, command, commit, and raw artifact. It is suitable
 only as a reproducible point of reference under comparable conditions.
+The [command-path optimization results](benchmarks/command-path-optimization-2026-07-30.md)
+compare the same focused benchmark before and after buffer reuse and preserve
+all samples in a raw artifact.
 
 regiondb is specialized chunk/grid storage for games and grid-based
 simulations. These scenarios characterize only the implemented regular-chunk
