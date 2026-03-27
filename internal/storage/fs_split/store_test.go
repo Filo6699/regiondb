@@ -697,7 +697,48 @@ func TestStoreCheckpointsWALThresholds(t *testing.T) {
 	}
 }
 
-func TestStoreWALGroupCommitUpdates(t *testing.T) {
+func TestStoreWALGroupCommitUsesUpdateBoundaries(t *testing.T) {
+	t.Parallel()
+
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 4})
+	for _, groupSize := range []uint64{1, 2, 3, 5} {
+		groupSize := groupSize
+		t.Run(fmt.Sprintf("group_%d", groupSize), func(t *testing.T) {
+			t.Parallel()
+
+			store := mustOpenWithOptions(t, t.TempDir(), g, Options{
+				Durability:            DurabilityFsyncWAL,
+				CheckpointRecords:     16,
+				CheckpointBytes:       1 << 20,
+				WALGroupCommitUpdates: groupSize,
+			})
+			t.Cleanup(func() {
+				closeStore(t, store)
+			})
+
+			for update := uint64(1); update <= groupSize*2+1; update++ {
+				chunk := mustChunk(t, g)
+				if err := chunk.Set(geometry.Offset{}, update); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.WriteChunk(geometry.Coord{}, chunk); err != nil {
+					t.Fatalf("WriteChunk(%d): %v", update, err)
+				}
+				wantPending := update % groupSize
+				if store.walUnsyncedUpdates != wantPending {
+					t.Fatalf(
+						"update %d pending WAL sync count = %d, want %d",
+						update,
+						store.walUnsyncedUpdates,
+						wantPending,
+					)
+				}
+			}
+		})
+	}
+}
+
+func TestStoreWALGroupCommitFlushesOnClose(t *testing.T) {
 	t.Parallel()
 
 	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 4})
@@ -708,24 +749,12 @@ func TestStoreWALGroupCommitUpdates(t *testing.T) {
 		WALGroupCommitUpdates: 3,
 	})
 	coord := geometry.Coord{}
-
-	for update := uint64(1); update <= 4; update++ {
-		chunk := mustChunk(t, g)
-		if err := chunk.Set(geometry.Offset{}, update); err != nil {
-			t.Fatal(err)
-		}
-		if err := store.WriteChunk(coord, chunk); err != nil {
-			t.Fatalf("WriteChunk(%d): %v", update, err)
-		}
-		wantPending := update % 3
-		if store.walUnsyncedUpdates != wantPending {
-			t.Fatalf(
-				"update %d pending WAL sync count = %d, want %d",
-				update,
-				store.walUnsyncedUpdates,
-				wantPending,
-			)
-		}
+	chunk := mustChunk(t, g)
+	if err := chunk.Set(geometry.Offset{}, 4); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteChunk(coord, chunk); err != nil {
+		t.Fatalf("WriteChunk(): %v", err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close(): %v", err)
