@@ -894,6 +894,73 @@ func TestStoreRejectsSecondWriter(t *testing.T) {
 	closeStore(t, second)
 }
 
+func TestStoreAllowsReadOnlyProcessesWithWriter(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 2})
+	coord := geometry.Coord{X: 2, Y: -3}
+	chunk := mustChunk(t, g)
+	if err := chunk.Set(geometry.Offset{}, 3); err != nil {
+		t.Fatal(err)
+	}
+	writer := mustOpen(t, root, g)
+	if err := writer.WriteChunk(coord, chunk); err != nil {
+		t.Fatal(err)
+	}
+
+	firstReader := mustOpenWithOptions(t, root, g, Options{ReadOnly: true})
+	secondReader := mustOpenWithOptions(t, root, g, Options{ReadOnly: true})
+	for index, reader := range []*Store{firstReader, secondReader} {
+		got, err := reader.ReadChunk(coord)
+		if err != nil {
+			t.Fatalf("reader %d ReadChunk(): %v", index, err)
+		}
+		value, err := got.Get(geometry.Offset{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if value != 3 {
+			t.Fatalf("reader %d value = %d, want 3", index, value)
+		}
+		if err := reader.WriteChunk(coord, chunk); !errors.Is(err, ErrReadOnly) {
+			t.Fatalf("reader %d WriteChunk() error = %v, want ErrReadOnly", index, err)
+		}
+	}
+
+	updated := mustChunk(t, g)
+	if err := updated.Set(geometry.Offset{}, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteChunk(coord, updated); err != nil {
+		t.Fatal(err)
+	}
+	got, err := firstReader.ReadChunk(coord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := got.Get(geometry.Offset{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != 1 {
+		t.Fatalf("read-only process retained stale chunk: got %d, want 1", value)
+	}
+}
+
+func TestReadOnlyStoreDoesNotCreateDataDirectory(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(t.TempDir(), "missing")
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 1})
+	if _, err := OpenWithOptions(root, g, Options{ReadOnly: true}); err == nil {
+		t.Fatal("read-only OpenWithOptions() created a missing data directory")
+	}
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing read-only data directory was changed: %v", err)
+	}
+}
+
 func TestClosedStoreRejectsOperations(t *testing.T) {
 	t.Parallel()
 

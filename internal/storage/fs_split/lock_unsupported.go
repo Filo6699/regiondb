@@ -2,18 +2,15 @@
 
 package fs_split
 
-import "errors"
+import (
+	"errors"
+	"os"
+)
 
-const lockName = ".regiondb.lock"
-
-var ErrWriterLocked = errors.New("data directory already has a writer")
-
-type writerLock struct{}
-
-func acquireWriterLock(string) (*writerLock, error) {
+func openWriterGuard(string) (*os.File, error) {
 	return nil, errors.New("exclusive data-directory locking is unsupported on this platform")
 }
 
-func (lock *writerLock) release() error {
+func closeWriterGuard(*os.File) error {
 	return nil
 }

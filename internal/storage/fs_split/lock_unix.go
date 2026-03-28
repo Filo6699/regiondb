@@ -9,15 +9,7 @@ import (
 	"syscall"
 )
 
-const lockName = ".regiondb.lock"
-
-var ErrWriterLocked = errors.New("data directory already has a writer")
-
-type writerLock struct {
-	file *os.File
-}
-
-func acquireWriterLock(path string) (*writerLock, error) {
+func openWriterGuard(path string) (*os.File, error) {
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open writer lock: %w", err)
@@ -29,11 +21,11 @@ func acquireWriterLock(path string) (*writerLock, error) {
 		}
 		return nil, errors.Join(fmt.Errorf("acquire writer lock: %w", err), closeErr)
 	}
-	return &writerLock{file: file}, nil
+	return file, nil
 }
 
-func (lock *writerLock) release() error {
-	unlockErr := syscall.Flock(int(lock.file.Fd()), syscall.LOCK_UN)
-	closeErr := lock.file.Close()
+func closeWriterGuard(file *os.File) error {
+	unlockErr := syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	closeErr := file.Close()
 	return errors.Join(unlockErr, closeErr)
 }

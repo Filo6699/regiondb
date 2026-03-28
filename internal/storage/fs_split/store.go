@@ -25,6 +25,7 @@ const (
 var (
 	ErrCorrupt          = errors.New("corrupt fs_split_v1 chunk")
 	ErrGeometryMismatch = errors.New("chunk geometry does not match store")
+	ErrReadOnly         = errors.New("store is read-only")
 )
 
 type Store struct {
@@ -38,6 +39,7 @@ type Store struct {
 	walBytes           int64
 	walUnsyncedUpdates uint64
 	walRecordBuffer    []byte
+	closed             bool
 	mu                 sync.RWMutex
 }
 
@@ -57,12 +59,27 @@ func OpenWithOptions(root string, g geometry.Geometry, options Options) (_ *Stor
 	if err != nil {
 		return nil, fmt.Errorf("resolve data directory: %w", err)
 	}
-	if err := os.MkdirAll(absoluteRoot, 0o755); err != nil {
-		return nil, fmt.Errorf("create data directory: %w", err)
-	}
 	options, err = options.validated()
 	if err != nil {
 		return nil, fmt.Errorf("open fs_split_v1: %w", err)
+	}
+	if options.ReadOnly {
+		info, err := os.Stat(absoluteRoot)
+		if err != nil {
+			return nil, fmt.Errorf("open read-only data directory: %w", err)
+		}
+		if !info.IsDir() {
+			return nil, errors.New("open read-only data directory: path is not a directory")
+		}
+		return &Store{
+			root:     absoluteRoot,
+			geometry: g,
+			options:  options,
+			cache:    newChunkCache(g, options.MaxLoadedChunks),
+		}, nil
+	}
+	if err := os.MkdirAll(absoluteRoot, 0o755); err != nil {
+		return nil, fmt.Errorf("create data directory: %w", err)
 	}
 	lock, err := acquireWriterLock(filepath.Join(absoluteRoot, lockName))
 	if err != nil {
@@ -106,9 +123,10 @@ func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.wal == nil && s.writerLock == nil {
+	if s.closed {
 		return nil
 	}
+	s.closed = true
 	var result error
 	if s.wal != nil {
 		if s.options.Durability == DurabilityFsyncWAL && s.walUnsyncedUpdates != 0 {
@@ -140,8 +158,14 @@ func (s *Store) WriteChunk(coord geometry.Coord, chunk *storage.Chunk) error {
 	if chunk.Geometry() != s.geometry {
 		return ErrGeometryMismatch
 	}
-	if s.wal == nil {
+	if s.closed {
 		return errors.New("write chunk: store is closed")
+	}
+	if s.options.ReadOnly {
+		return fmt.Errorf("write chunk: %w", ErrReadOnly)
+	}
+	if err := s.writerLock.checkHealthy(); err != nil {
+		return err
 	}
 
 	payload := chunk.Bytes()
@@ -171,14 +195,16 @@ func (s *Store) ReadChunk(coord geometry.Coord) (chunk *storage.Chunk, returnErr
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if s.wal == nil {
+	if s.closed {
 		return nil, errors.New("read chunk: store is closed")
 	}
-	if chunk, found, err := s.cache.get(coord); found || err != nil {
-		if err != nil {
-			return nil, fmt.Errorf("read cached chunk: %w", err)
+	if !s.options.ReadOnly {
+		if chunk, found, err := s.cache.get(coord); found || err != nil {
+			if err != nil {
+				return nil, fmt.Errorf("read cached chunk: %w", err)
+			}
+			return chunk, nil
 		}
-		return chunk, nil
 	}
 	path := s.chunkPath(coord)
 	file, err := os.Open(path)
@@ -213,8 +239,10 @@ func (s *Store) ReadChunk(coord geometry.Coord) (chunk *storage.Chunk, returnErr
 	if err != nil {
 		return nil, fmt.Errorf("%w: decode payload: %v", ErrCorrupt, err)
 	}
-	if err := s.cache.put(coord, payload); err != nil {
-		return nil, fmt.Errorf("cache read chunk: %w", err)
+	if !s.options.ReadOnly {
+		if err := s.cache.put(coord, payload); err != nil {
+			return nil, fmt.Errorf("cache read chunk: %w", err)
+		}
 	}
 	return chunk, nil
 }

@@ -21,6 +21,7 @@ const (
 )
 
 type Options struct {
+	ReadOnly              bool
 	Durability            DurabilityMode
 	CheckpointRecords     uint64
 	CheckpointBytes       int64
