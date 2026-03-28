@@ -112,3 +112,25 @@ backend compatibility contract.
 Decoded chunks are retained in a bounded in-memory LRU cache. Eviction changes
 only memory use: a later read reloads and validates the chunk file. Cache state
 is neither stored in the data directory nor part of the on-disk format.
+
+## Writer ownership metadata
+
+`.regiondb.lock` is a mode `0700` control directory, not chunk data. Its
+`guard` file carries the operating-system writer lock. Its atomically replaced
+`owner.json` records the positive decimal process ID, a 32-character
+hexadecimal session ID, and RFC 3339 `started_at` and `heartbeat_at`
+timestamps. The session ID distinguishes separate ownership lifecycles even
+when the operating system reuses a process ID.
+
+Ownership metadata is operational state and does not change the
+`fs_split_v1` chunk or WAL formats. A read-only store ignores this directory
+and reads only published chunk files. A writer fails closed on malformed
+metadata. It may replace valid abandoned metadata only after its heartbeat is
+older than the documented stale interval and after acquiring the guard.
+
+Earlier development versions created `.regiondb.lock` as a regular file.
+Before opening such a data directory with this version, stop every older
+writer and remove only that control file. Chunk files and `.regiondb.wal` do
+not require conversion. Downgrading requires the same stopped-writer
+procedure: remove the control directory before starting a version that expects
+a regular lock file.
