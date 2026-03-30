@@ -1,0 +1,63 @@
+name: Stress flake gate
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stress-flake:
+    name: TLS smoke and stress repeat
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+        with:
+          go-version: "1.24.x"
+          cache: true
+          cache-dependency-path: go.mod
+
+      - name: Run TLS smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/regiondb-flake-logs"
+          go test ./cmd/regiondb \
+            -run '^TestTLSStartupSmoke$' \
+            -count=1 \
+            -v \
+            2>&1 | tee "$RUNNER_TEMP/regiondb-flake-logs/tls-smoke.log"
+
+      - name: Repeat stress suite until first failure
+        shell: bash
+        env:
+          STRESS_REPETITIONS: "20"
+        run: |
+          set -euo pipefail
+          log_dir="$RUNNER_TEMP/regiondb-flake-logs"
+          mkdir -p "$log_dir"
+          for run in $(seq 1 "$STRESS_REPETITIONS"); do
+            log_file="$log_dir/stress-$(printf '%02d' "$run").log"
+            echo "stress repetition $run of $STRESS_REPETITIONS" | tee "$log_file"
+            go test ./... \
+              -run '^TestStress' \
+              -count=1 \
+              -v \
+              2>&1 | tee -a "$log_file"
+          done
+
+      - name: Upload flake gate logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: stress-flake-logs-${{ github.sha }}
+          path: ${{ runner.temp }}/regiondb-flake-logs
+          if-no-files-found: error
+          retention-days: 14
