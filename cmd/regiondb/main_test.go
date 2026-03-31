@@ -11,7 +11,6 @@ import (
 	"encoding/pem"
 	"io"
 	"math/big"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -160,16 +159,15 @@ func TestParseConfigStorageOptions(t *testing.T) {
 }
 
 func TestTLSStartupSmoke(t *testing.T) {
-	certificatePath, keyPath := writeTestCertificate(t)
+	certificatePath, keyPath, certificate := writeTestCertificate(t)
 	tlsConfig, err := loadTLSConfig(config{tlsCert: certificatePath, tlsKey: keyPath})
 	if err != nil {
 		t.Fatal(err)
 	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := listen("127.0.0.1:0", tlsConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
-	listener = tls.NewListener(listener, tlsConfig)
 
 	g, err := geometry.New(geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 1})
 	if err != nil {
@@ -195,9 +193,12 @@ func TestTLSStartupSmoke(t *testing.T) {
 		result <- server.Serve(ctx, listener, engine)
 	}()
 
+	roots := x509.NewCertPool()
+	roots.AddCert(certificate)
 	connection, err := tls.Dial("tcp", listener.Addr().String(), &tls.Config{
-		InsecureSkipVerify: true, // The generated certificate is scoped to this test.
-		MinVersion:         tls.VersionTLS12,
+		RootCAs:    roots,
+		ServerName: "localhost",
+		MinVersion: tls.VersionTLS12,
 	})
 	if err != nil {
 		cancel()
@@ -247,7 +248,7 @@ func TestRunRejectsInvalidTLSBeforeOpeningStore(t *testing.T) {
 	}
 }
 
-func writeTestCertificate(t *testing.T) (string, string) {
+func writeTestCertificate(t *testing.T) (string, string, *x509.Certificate) {
 	t.Helper()
 
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
@@ -261,8 +262,13 @@ func writeTestCertificate(t *testing.T) (string, string) {
 		NotAfter:     time.Unix(1<<31, 0),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{"localhost"},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, publicKey, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate, err := x509.ParseCertificate(der)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +285,7 @@ func writeTestCertificate(t *testing.T) (string, string) {
 	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key}), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return certificatePath, keyPath
+	return certificatePath, keyPath, certificate
 }
 
 func TestRunVersion(t *testing.T) {

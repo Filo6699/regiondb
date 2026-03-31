@@ -85,12 +85,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnEr
 	if err != nil {
 		return err
 	}
-	listener, err := net.Listen("tcp", config.listenAddress)
+	listener, err := listen(config.listenAddress, tlsConfig)
 	if err != nil {
 		return fmt.Errorf("listen on %q: %w", config.listenAddress, err)
-	}
-	if tlsConfig != nil {
-		listener = tls.NewListener(listener, tlsConfig)
 	}
 	defer func() {
 		_ = listener.Close()
@@ -114,6 +111,17 @@ func loadTLSConfig(config config) (*tls.Config, error) {
 		Certificates: []tls.Certificate{certificate},
 		MinVersion:   tls.VersionTLS12,
 	}, nil
+}
+
+func listen(address string, tlsConfig *tls.Config) (net.Listener, error) {
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return nil, err
+	}
+	if tlsConfig != nil {
+		return tls.NewListener(listener, tlsConfig), nil
+	}
+	return listener, nil
 }
 
 func parseConfig(args []string, stderr io.Writer) (config, error) {
