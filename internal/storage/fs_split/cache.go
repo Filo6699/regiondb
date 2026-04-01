@@ -2,6 +2,7 @@ package fs_split
 
 import (
 	"container/list"
+	"fmt"
 	"sync"
 
 	"github.com/Filo6699/regiondb/internal/geometry"
@@ -9,8 +10,8 @@ import (
 )
 
 type cacheEntry struct {
-	coord geometry.Coord
-	chunk *storage.Chunk
+	coord   geometry.Coord
+	payload []byte
 }
 
 type chunkCache struct {
@@ -39,8 +40,8 @@ func (cache *chunkCache) get(coord geometry.Coord) (*storage.Chunk, bool, error)
 		return nil, false, nil
 	}
 	cache.recent.MoveToFront(element)
-	entry := element.Value.(cacheEntry)
-	chunk, err := storage.ChunkFromBytes(cache.geometry, entry.chunk.Bytes())
+	entry := element.Value.(*cacheEntry)
+	chunk, err := storage.ChunkFromBytes(cache.geometry, entry.payload)
 	if err != nil {
 		return nil, false, err
 	}
@@ -48,27 +49,42 @@ func (cache *chunkCache) get(coord geometry.Coord) (*storage.Chunk, bool, error)
 }
 
 func (cache *chunkCache) put(coord geometry.Coord, payload []byte) error {
-	chunk, err := storage.ChunkFromBytes(cache.geometry, payload)
-	if err != nil {
-		return err
+	if len(payload) != cache.geometry.PayloadBytes() {
+		return fmt.Errorf(
+			"%w: got %d bytes, want %d",
+			storage.ErrPayloadSize,
+			len(payload),
+			cache.geometry.PayloadBytes(),
+		)
 	}
 
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 
 	if element, found := cache.entries[coord]; found {
-		element.Value = cacheEntry{coord: coord, chunk: chunk}
+		// The buffer of a resident entry is owned by the cache alone, so an
+		// update overwrites it in place instead of replacing the entry.
+		copy(element.Value.(*cacheEntry).payload, payload)
 		cache.recent.MoveToFront(element)
 		return nil
 	}
-	element := cache.recent.PushFront(cacheEntry{coord: coord, chunk: chunk})
-	cache.entries[coord] = element
-	if cache.recent.Len() > cache.max {
-		oldest := cache.recent.Back()
-		entry := oldest.Value.(cacheEntry)
-		delete(cache.entries, entry.coord)
-		cache.recent.Remove(oldest)
+	if cache.recent.Len() < cache.max {
+		buffer := append([]byte(nil), payload...)
+		cache.entries[coord] = cache.recent.PushFront(&cacheEntry{coord: coord, payload: buffer})
+		return nil
 	}
+
+	// Sparse workloads evict on nearly every admission. Reusing both the
+	// least-recently-used element and its payload keeps that path constant:
+	// it examines one resident and allocates neither resource instead of
+	// scanning the world.
+	oldest := cache.recent.Back()
+	entry := oldest.Value.(*cacheEntry)
+	delete(cache.entries, entry.coord)
+	entry.coord = coord
+	copy(entry.payload, payload)
+	cache.recent.MoveToFront(oldest)
+	cache.entries[coord] = oldest
 	return nil
 }
 
