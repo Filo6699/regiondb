@@ -50,6 +50,9 @@ the data directory or listener. TLS listeners require TLS 1.2 or later.
 Connection URIs use `region://token@host:port/` for plaintext TCP and
 `regions://token@host:port/` for TLS.
 
+For a non-root container with persistent storage, an authenticated healthcheck,
+and an opt-in smoke-test profile, see [Docker](docs/DOCKER.md).
+
 The current contracts are documented in:
 
 - [Terminology](docs/TERMINOLOGY.md)
@@ -57,6 +60,7 @@ The current contracts are documented in:
 - [Storage format](docs/STORAGE_FORMAT.md)
 - [Concurrency model](docs/CONCURRENCY.md)
 - [Scenario benchmarks](docs/BENCHMARKS.md)
+- [Docker](docs/DOCKER.md)
 - [Release notes](docs/releases/v0.1.1-alpha.md)
 
 ## Scenario benchmarks

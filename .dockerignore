@@ -1,0 +1,11 @@
+.git
+.github
+.gitignore
+.golangci.yml
+.tools
+bin
+coverage.out
+docs
+scripts/git
+security
+*.test
