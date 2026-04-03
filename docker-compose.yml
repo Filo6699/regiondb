@@ -1,0 +1,34 @@
+services:
+  regiondb:
+    build:
+      context: .
+    environment:
+      REGIONDB_TOKEN: ${REGIONDB_TOKEN:?set REGIONDB_TOKEN to a non-empty token}
+    ports:
+      - "${REGIONDB_PORT:-4242}:4242"
+    volumes:
+      - regiondb-data:/var/lib/regiondb
+    restart: unless-stopped
+
+  test:
+    build:
+      context: .
+    profiles:
+      - test
+    depends_on:
+      regiondb:
+        condition: service_healthy
+    environment:
+      REGIONDB_TOKEN: ${REGIONDB_TOKEN:?set REGIONDB_TOKEN to a non-empty token}
+    entrypoint:
+      - /bin/sh
+      - -ec
+    command:
+      - |
+        response="$$(printf 'AUTH %s\r\nINFO\r\n' "$$REGIONDB_TOKEN" | nc -w 2 regiondb 4242)"
+        printf '%s\n' "$$response" | grep -q '^+OK'
+        printf '%s\n' "$$response" | grep -q 'regiondb'
+    restart: "no"
+
+volumes:
+  regiondb-data:
