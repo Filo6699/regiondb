@@ -378,7 +378,7 @@ func writeAtomic(path string, data []byte, syncData bool) (returnErr error) {
 		return fmt.Errorf("close temporary file: %w", err)
 	}
 	closed = true
-	if err := os.Rename(temporaryPath, path); err != nil {
+	if err := replaceFile(temporaryPath, path); err != nil {
 		return fmt.Errorf("replace destination: %w", err)
 	}
 	renamed = true
