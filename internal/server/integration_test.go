@@ -75,7 +75,7 @@ func testIntegrationTCPConcurrentClients(t *testing.T) {
 			defer clients.Done()
 			<-start
 
-			connection, err := net.DialTimeout("tcp", address, 5*time.Second)
+			connection, err := net.DialTimeout(address.Network(), address.String(), 5*time.Second)
 			if err != nil {
 				results <- fmt.Errorf("client %d dial: %w", client, err)
 				return
@@ -117,7 +117,7 @@ func testIntegrationTCPConcurrentClients(t *testing.T) {
 	}
 }
 
-func startIntegrationServer(t *testing.T, options Options) string {
+func startIntegrationServer(t *testing.T, options Options) net.Addr {
 	t.Helper()
 
 	g, err := geometry.New(geometry.Config{ChunkEdge: 2, LargeChunkEdge: 2, BlockBits: 4})
@@ -153,13 +153,13 @@ func startIntegrationServer(t *testing.T, options Options) string {
 			t.Errorf("Close() error = %v", err)
 		}
 	})
-	return listener.Addr().String()
+	return listener.Addr()
 }
 
-func dialIntegrationServer(t *testing.T, address string) net.Conn {
+func dialIntegrationServer(t *testing.T, address net.Addr) net.Conn {
 	t.Helper()
 
-	connection, err := net.DialTimeout("tcp", address, 5*time.Second)
+	connection, err := net.DialTimeout(address.Network(), address.String(), 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
