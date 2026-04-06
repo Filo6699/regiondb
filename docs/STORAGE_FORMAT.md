@@ -102,8 +102,10 @@ before truncating and synchronizing the WAL.
   beyond the last successful WAL sync. Recovery can reconstruct an
   unsynchronized chunk replacement when the appended WAL bytes persist, but a
   process exit is not equivalent to power-loss durability.
-- `fsync-checkpoint` synchronizes the temporary chunk and its parent directory
-  before acknowledging the write. WAL truncation is also synchronized.
+- `fsync-checkpoint` synchronizes the temporary chunk and the replacement
+  before acknowledging the write. Unix systems synchronize the parent
+  directory after the rename; Windows uses a write-through replacement. WAL
+  truncation is also synchronized.
 
 These modes describe single-host filesystem calls. Hardware and filesystem
 behavior can impose weaker guarantees. There is no tombstone or alternate

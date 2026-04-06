@@ -2,13 +2,30 @@ package fs_split
 
 import (
 	"errors"
-	"syscall"
+
+	"golang.org/x/sys/windows"
 )
 
 const (
-	windowsErrorSharingViolation syscall.Errno = 32
-	windowsErrorLockViolation    syscall.Errno = 33
+	windowsErrorSharingViolation = windows.ERROR_SHARING_VIOLATION
+	windowsErrorLockViolation    = windows.ERROR_LOCK_VIOLATION
 )
+
+func replacePath(oldPath, newPath string, writeThrough bool) error {
+	oldPathPointer, err := windows.UTF16PtrFromString(oldPath)
+	if err != nil {
+		return err
+	}
+	newPathPointer, err := windows.UTF16PtrFromString(newPath)
+	if err != nil {
+		return err
+	}
+	flags := uint32(windows.MOVEFILE_REPLACE_EXISTING)
+	if writeThrough {
+		flags |= windows.MOVEFILE_WRITE_THROUGH
+	}
+	return windows.MoveFileEx(oldPathPointer, newPathPointer, flags)
+}
 
 func isTransientReplaceError(err error) bool {
 	// MoveFileEx reports these errors while another process temporarily denies

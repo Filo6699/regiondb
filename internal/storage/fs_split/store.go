@@ -378,21 +378,13 @@ func writeAtomic(path string, data []byte, syncData bool) (returnErr error) {
 		return fmt.Errorf("close temporary file: %w", err)
 	}
 	closed = true
-	if err := replaceFile(temporaryPath, path); err != nil {
+	if err := replaceFile(temporaryPath, path, syncData); err != nil {
 		return fmt.Errorf("replace destination: %w", err)
 	}
 	renamed = true
 	if syncData {
-		directory, err := os.Open(filepath.Dir(path))
-		if err != nil {
-			return fmt.Errorf("open parent directory: %w", err)
-		}
-		if err := directory.Sync(); err != nil {
-			_ = directory.Close()
+		if err := syncParentDirectory(filepath.Dir(path)); err != nil {
 			return fmt.Errorf("sync parent directory: %w", err)
-		}
-		if err := directory.Close(); err != nil {
-			return fmt.Errorf("close parent directory: %w", err)
 		}
 	}
 	return nil
