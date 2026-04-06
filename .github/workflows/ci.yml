@@ -41,13 +41,7 @@ jobs:
             test-packages: ./...
           - name: windows
             os: windows-latest
-            test-packages: >-
-              ./internal/benchmark
-              ./internal/bitcodec
-              ./internal/geometry
-              ./internal/protocol
-              ./internal/storage
-              ./pkg/regiondb
+            test-packages: ./...
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out source
@@ -68,7 +62,7 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test ${{ matrix.test-packages }}
+        run: go test ${{ runner.os == 'Windows' && '-v' || '' }} ${{ matrix.test-packages }}
 
       - name: Build
         run: go build ${{ runner.os == 'Windows' && '-v' || '' }} ./...

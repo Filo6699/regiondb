@@ -1,9 +1,6 @@
 package fs_split
 
-import (
-	"os"
-	"time"
-)
+import "time"
 
 var replaceRetryDelays = [...]time.Duration{
 	5 * time.Millisecond,
@@ -14,8 +11,16 @@ var replaceRetryDelays = [...]time.Duration{
 	160 * time.Millisecond,
 }
 
-func replaceFile(oldPath, newPath string) error {
-	return replaceFileWithRetry(oldPath, newPath, os.Rename, isTransientReplaceError, time.Sleep)
+func replaceFile(oldPath, newPath string, writeThrough bool) error {
+	return replaceFileWithRetry(
+		oldPath,
+		newPath,
+		func(oldPath, newPath string) error {
+			return replacePath(oldPath, newPath, writeThrough)
+		},
+		isTransientReplaceError,
+		time.Sleep,
+	)
 }
 
 func replaceFileWithRetry(
