@@ -62,7 +62,36 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test ${{ runner.os == 'Windows' && '-v' || '' }} ${{ matrix.test-packages }}
+        if: runner.os != 'Windows'
+        run: go test ${{ matrix.test-packages }}
+
+      - name: Test with failure annotations
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          go test -json ${{ matrix.test-packages }} |
+            Tee-Object -FilePath windows-test-results.json
+          $testExitCode = $LASTEXITCODE
+          if ($testExitCode -ne 0) {
+            Get-Content windows-test-results.json | ForEach-Object {
+              $event = $_ | ConvertFrom-Json
+              if ($event.Action -eq "fail" -and $event.Test) {
+                $title = $event.Test.Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
+                $message = "$($event.Package)::$($event.Test)".Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
+                Write-Output "::error title=$title::$message"
+              }
+            }
+          }
+          exit $testExitCode
+
+      - name: Upload Windows test logs
+        if: failure() && runner.os == 'Windows'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-test-logs
+          path: windows-test-results.json
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Build
         run: go build ${{ runner.os == 'Windows' && '-v' || '' }} ./...
