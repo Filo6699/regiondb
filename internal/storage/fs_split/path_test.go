@@ -26,7 +26,7 @@ var windowsReservedNames = map[string]struct{}{
 func TestChunkPathsUsePortableComponents(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
+	root := testTempDir(t)
 	g := mustGeometry(t, geometry.Config{ChunkEdge: 2, LargeChunkEdge: 4, BlockBits: 8})
 	// Path generation is independent of opening files. Keeping this test
 	// handle-free lets Windows clean up the temporary directory immediately.
@@ -69,7 +69,7 @@ func TestChunkPathsUsePortableComponents(t *testing.T) {
 func TestWriteAtomicReleasesFileHandlesBeforeReturn(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
+	root := testTempDir(t)
 	path := filepath.Join(root, "chunk.rdb")
 	payload := []byte("packed chunk")
 	if err := writeAtomic(path, payload, false); err != nil {

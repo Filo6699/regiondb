@@ -13,7 +13,7 @@ import (
 func TestWriterOwnershipRejectsLiveOwner(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), lockName)
+	path := filepath.Join(testTempDir(t), lockName)
 	first, err := acquireWriterLockWithConfig(path, lockConfig{now: fixedTime("2026-03-28T10:00:00Z")})
 	if err != nil {
 		t.Fatalf("acquire first writer lock: %v", err)
@@ -32,7 +32,7 @@ func TestWriterOwnershipRejectsLiveOwner(t *testing.T) {
 func TestWriterOwnershipRecoversStaleMetadata(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), lockName)
+	path := filepath.Join(testTempDir(t), lockName)
 	if err := ensureLockDirectory(path); err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestWriterOwnershipFailsClosedForFreshOrMalformedMetadata(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			path := filepath.Join(t.TempDir(), lockName)
+			path := filepath.Join(testTempDir(t), lockName)
 			if err := ensureLockDirectory(path); err != nil {
 				t.Fatal(err)
 			}
@@ -108,7 +108,7 @@ func TestWriterOwnershipFailsClosedForFreshOrMalformedMetadata(t *testing.T) {
 func TestWriterOwnershipHeartbeatAndReleaseLifecycle(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), lockName)
+	path := filepath.Join(testTempDir(t), lockName)
 	heartbeat := make(chan time.Time)
 	heartbeatDone := make(chan struct{}, 1)
 	started := mustTime(t, "2026-03-28T10:00:00Z")
