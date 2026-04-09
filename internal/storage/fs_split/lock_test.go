@@ -140,7 +140,7 @@ func TestWriterOwnershipHeartbeatAndReleaseLifecycle(t *testing.T) {
 		t.Fatalf("owner metadata remains after release: %v", err)
 	}
 
-	reopened, err := acquireWriterLockWithConfig(path, lockConfig{now: func() time.Time { return next }})
+	reopened, err := acquireWriterLockAfterRelease(path, lockConfig{now: func() time.Time { return next }})
 	if err != nil {
 		t.Fatalf("acquire writer lock after release: %v", err)
 	}
