@@ -330,6 +330,45 @@ func TestStressHotContentionEvictionCycles(t *testing.T) {
 		}
 	}
 
+	// The scheduler decides which successful reads are most recent, so the
+	// identity of the final residents is intentionally unspecified. Eviction
+	// must still leave a full, bounded, internally consistent cache whose
+	// payloads agree with the completed writes.
+	store.cache.mu.Lock()
+	residents := len(store.cache.entries)
+	ordered := store.cache.recent.Len()
+	for coord, element := range store.cache.entries {
+		entry := element.Value.(*cacheEntry)
+		if entry.coord != coord {
+			store.cache.mu.Unlock()
+			t.Fatalf("cache key %v contains entry for %v", coord, entry.coord)
+		}
+		worker := int(coord.X)
+		if worker < 0 || worker >= workerCount || coords[worker] != coord {
+			store.cache.mu.Unlock()
+			t.Fatalf("cache contains unexpected coordinate %v", coord)
+		}
+		chunk, err := storage.ChunkFromBytes(g, entry.payload)
+		if err != nil {
+			store.cache.mu.Unlock()
+			t.Fatalf("cached chunk %v: %v", coord, err)
+		}
+		value, err := chunk.Get(geometry.Offset{})
+		if err != nil {
+			store.cache.mu.Unlock()
+			t.Fatalf("cached chunk %v value: %v", coord, err)
+		}
+		want := uint64(cycles + worker)
+		if value != want {
+			store.cache.mu.Unlock()
+			t.Fatalf("cached chunk %v value = %d, want %d", coord, value, want)
+		}
+	}
+	store.cache.mu.Unlock()
+	if residents != 2 || ordered != residents {
+		t.Fatalf("cache after stress: residents = %d, recency entries = %d, want 2 and equal", residents, ordered)
+	}
+
 	for worker, coord := range coords {
 		chunk, err := store.ReadChunk(coord)
 		if err != nil {
