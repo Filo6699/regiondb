@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/Filo6699/regiondb/internal/geometry"
 	"github.com/Filo6699/regiondb/internal/storage"
@@ -20,6 +21,7 @@ type chunkCache struct {
 	mu       sync.Mutex
 	entries  map[geometry.Coord]*list.Element
 	recent   *list.List
+	loaded   atomic.Int64
 }
 
 func newChunkCache(g geometry.Geometry, max int) *chunkCache {
@@ -71,6 +73,7 @@ func (cache *chunkCache) put(coord geometry.Coord, payload []byte) error {
 	if cache.recent.Len() < cache.max {
 		buffer := append([]byte(nil), payload...)
 		cache.entries[coord] = cache.recent.PushFront(&cacheEntry{coord: coord, payload: buffer})
+		cache.loaded.Add(1)
 		return nil
 	}
 
@@ -98,4 +101,9 @@ func (cache *chunkCache) remove(coord geometry.Coord) {
 	}
 	delete(cache.entries, coord)
 	cache.recent.Remove(element)
+	cache.loaded.Add(-1)
+}
+
+func (cache *chunkCache) loadedChunks() int {
+	return int(cache.loaded.Load())
 }

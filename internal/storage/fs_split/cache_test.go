@@ -32,8 +32,8 @@ func TestChunkCacheSparseEvictionKeepsConstantFootprint(t *testing.T) {
 			t.Fatalf("put(%v): %v", coord, err)
 		}
 
+		residents := cache.loadedChunks()
 		cache.mu.Lock()
-		residents := len(cache.entries)
 		ordered := cache.recent.Len()
 		for _, element := range cache.entries {
 			buffers[&element.Value.(*cacheEntry).payload[0]] = struct{}{}
@@ -179,11 +179,35 @@ func TestChunkCacheRejectsMismatchedPayloadSize(t *testing.T) {
 			t.Fatalf("put(payload of %d bytes) error = %v, want ErrPayloadSize", size, err)
 		}
 	}
-	cache.mu.Lock()
-	residents := len(cache.entries)
-	cache.mu.Unlock()
+	residents := cache.loadedChunks()
 	if residents != 0 {
 		t.Fatalf("rejected payloads left %d cached entries", residents)
+	}
+}
+
+func TestChunkCacheLoadedObservationTracksResidents(t *testing.T) {
+	t.Parallel()
+
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 1})
+	cache := newChunkCache(g, 2)
+	coords := []geometry.Coord{{X: 1}, {X: 2}, {X: 3}}
+	for index, coord := range coords {
+		if err := cache.put(coord, cachePayload(t, g, index)); err != nil {
+			t.Fatalf("put(%v): %v", coord, err)
+		}
+		want := min(index+1, 2)
+		if got := cache.loadedChunks(); got != want {
+			t.Fatalf("loaded chunks after put(%v) = %d, want %d", coord, got, want)
+		}
+	}
+
+	cache.remove(coords[0])
+	if got := cache.loadedChunks(); got != 2 {
+		t.Fatalf("loaded chunks after removing evicted entry = %d, want 2", got)
+	}
+	cache.remove(coords[1])
+	if got := cache.loadedChunks(); got != 1 {
+		t.Fatalf("loaded chunks after removing resident entry = %d, want 1", got)
 	}
 }
 

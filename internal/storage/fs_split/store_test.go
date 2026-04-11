@@ -1093,8 +1093,8 @@ func TestStoreEvictsAndReloadsChunks(t *testing.T) {
 
 	store.cache.mu.Lock()
 	_, firstLoaded := store.cache.entries[coords[0]]
-	loaded := len(store.cache.entries)
 	store.cache.mu.Unlock()
+	loaded := store.cache.loadedChunks()
 	if firstLoaded || loaded != 1 {
 		t.Fatalf("cache after eviction: first loaded = %t, size = %d", firstLoaded, loaded)
 	}
@@ -1113,8 +1113,8 @@ func TestStoreEvictsAndReloadsChunks(t *testing.T) {
 	store.cache.mu.Lock()
 	_, firstLoaded = store.cache.entries[coords[0]]
 	_, secondLoaded := store.cache.entries[coords[1]]
-	loaded = len(store.cache.entries)
 	store.cache.mu.Unlock()
+	loaded = store.cache.loadedChunks()
 	if !firstLoaded || secondLoaded || loaded != 1 {
 		t.Fatalf("cache after reload: first = %t, second = %t, size = %d", firstLoaded, secondLoaded, loaded)
 	}
