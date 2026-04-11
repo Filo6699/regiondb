@@ -44,9 +44,10 @@ func TestSessionAuthentication(t *testing.T) {
 			wantAuthenticated: true,
 		},
 		{
-			name:              "authenticated info",
-			frame:             "INFO\r\n",
-			want:              "$8\r\nregiondb\r\n",
+			name:  "authenticated info",
+			frame: "INFO\r\n",
+			want: "$118\r\nregiondb_version=1\ncache_hits=0\ncache_misses=0\nloaded_chunks=0\n" +
+				"dirty_chunks=0\nevictions=0\nwal_flushes=0\ncheckpoints=0\n\r\n",
 			wantAuthenticated: true,
 		},
 		{
@@ -97,6 +98,37 @@ func TestSessionBlockAndChunkCommands(t *testing.T) {
 	for _, test := range tests {
 		assertResponse(t, session, test.frame, test.want)
 	}
+}
+
+func TestSessionInfoRuntimeCounters(t *testing.T) {
+	t.Parallel()
+
+	g := testGeometry(t)
+	store := &memoryStore{
+		chunks: make(map[geometry.Coord]*storage.Chunk),
+		stats: storage.RuntimeStats{
+			CacheHits:    1,
+			CacheMisses:  2,
+			LoadedChunks: 3,
+			DirtyChunks:  4,
+			Evictions:    5,
+			WALFlushes:   6,
+			Checkpoints:  7,
+		},
+	}
+	engine, err := NewEngine(g, store, "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := engine.NewSession()
+	assertResponse(t, session, "AUTH test-token\r\n", "+OK\r\n")
+	assertResponse(
+		t,
+		session,
+		"INFO\r\n",
+		"$118\r\nregiondb_version=1\ncache_hits=1\ncache_misses=2\nloaded_chunks=3\n"+
+			"dirty_chunks=4\nevictions=5\nwal_flushes=6\ncheckpoints=7\n\r\n",
+	)
 }
 
 func TestSessionRejectsInvalidCommands(t *testing.T) {
@@ -216,7 +248,12 @@ func BenchmarkSessionCommands(b *testing.B) {
 		want  string
 	}{
 		{name: "PING", frame: []byte("PING\r\n"), want: "+OK PONG\r\n"},
-		{name: "INFO", frame: []byte("INFO\r\n"), want: "$8\r\nregiondb\r\n"},
+		{
+			name:  "INFO",
+			frame: []byte("INFO\r\n"),
+			want: "$118\r\nregiondb_version=1\ncache_hits=0\ncache_misses=0\nloaded_chunks=0\n" +
+				"dirty_chunks=0\nevictions=0\nwal_flushes=0\ncheckpoints=0\n\r\n",
+		},
 		{name: "CHUNK_text", frame: []byte("CHUNK 2 -3\r\n"), want: "$4\r\n4104\r\n"},
 		{name: "CHUNK_binary", frame: []byte("CHUNKBIN 2 -3\r\n"), want: "$2\r\n\x41\x04\r\n"},
 	}
@@ -332,6 +369,11 @@ type memoryStore struct {
 	chunks   map[geometry.Coord]*storage.Chunk
 	readErr  error
 	writeErr error
+	stats    storage.RuntimeStats
+}
+
+func (s *memoryStore) RuntimeStats() storage.RuntimeStats {
+	return s.stats
 }
 
 func (s *memoryStore) ReadChunk(coord geometry.Coord) (*storage.Chunk, error) {

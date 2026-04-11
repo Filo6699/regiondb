@@ -46,6 +46,7 @@ func (s *Store) syncWAL() error {
 	if err := s.wal.Sync(); err != nil {
 		return fmt.Errorf("sync WAL: %w", err)
 	}
+	s.walFlushCount.Add(1)
 	s.walUnsyncedUpdates = 0
 	return nil
 }
@@ -200,6 +201,7 @@ func (s *Store) checkpointWAL() error {
 	}
 	s.walRecords = 0
 	s.walBytes = 0
+	s.checkpointCount.Add(1)
 	return nil
 }
 
@@ -214,6 +216,7 @@ func (s *Store) clearWAL(syncData bool) error {
 		if err := s.wal.Sync(); err != nil {
 			return fmt.Errorf("sync truncated WAL: %w", err)
 		}
+		s.walFlushCount.Add(1)
 	}
 	s.walUnsyncedUpdates = 0
 	return nil
