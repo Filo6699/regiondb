@@ -16,6 +16,7 @@ import (
 type ChunkStore interface {
 	ReadChunk(geometry.Coord) (*storage.Chunk, error)
 	WriteChunk(geometry.Coord, *storage.Chunk) error
+	RuntimeStats() storage.RuntimeStats
 }
 
 type Engine struct {
@@ -112,7 +113,7 @@ func (s *Session) Execute(command Command) Response {
 		if response := requireArity(command.Args, 0); response != nil {
 			return *response
 		}
-		return bulkResponse([]byte("regiondb"))
+		return bulkResponse(infoPayload(s.engine.store.RuntimeStats()))
 	case "GET":
 		return s.get(command.Args)
 	case "SET":
@@ -128,6 +129,25 @@ func (s *Session) Execute(command Command) Response {
 	default:
 		return errorResponse("COMMAND", "unknown command")
 	}
+}
+
+func infoPayload(stats storage.RuntimeStats) []byte {
+	payload := make([]byte, 0, 256)
+	payload = append(payload, "regiondb_version=1\n"...)
+	payload = appendInfoCounter(payload, "cache_hits", stats.CacheHits)
+	payload = appendInfoCounter(payload, "cache_misses", stats.CacheMisses)
+	payload = appendInfoCounter(payload, "loaded_chunks", stats.LoadedChunks)
+	payload = appendInfoCounter(payload, "dirty_chunks", stats.DirtyChunks)
+	payload = appendInfoCounter(payload, "evictions", stats.Evictions)
+	payload = appendInfoCounter(payload, "wal_flushes", stats.WALFlushes)
+	return appendInfoCounter(payload, "checkpoints", stats.Checkpoints)
+}
+
+func appendInfoCounter(payload []byte, key string, value uint64) []byte {
+	payload = append(payload, key...)
+	payload = append(payload, '=')
+	payload = strconv.AppendUint(payload, value, 10)
+	return append(payload, '\n')
 }
 
 func (s *Session) authenticate(args []string) Response {

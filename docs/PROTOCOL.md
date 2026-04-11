@@ -56,7 +56,7 @@ distinct; the [project terminology](TERMINOLOGY.md) defines their names.
 |---|---|---|
 | `AUTH token` | `+OK` or `-ERR AUTH ...` | Authenticate the connection. |
 | `PING` | `+OK PONG` | Check an authenticated session. |
-| `INFO` | Bulk `regiondb` identifier | Identify the server implementation. |
+| `INFO` | Bulk runtime snapshot | Identify the server and report bounded runtime counters. |
 | `GET x y` | Bulk decimal value | Read a block; an absent chunk reads as zero. |
 | `SET x y value` | `+OK` | Persist one packed block value. |
 | `EXISTS x y` | `+OK 0` or `+OK 1` | Report whether the current block value is nonzero. |
@@ -64,6 +64,12 @@ distinct; the [project terminology](TERMINOLOGY.md) defines their names.
 | `CHUNKBIN x y` | Bulk binary payload | Read the exact packed regular-chunk bytes without hexadecimal encoding. |
 | `CHUNKSET x y payload` | `+OK` | Persist a packed regular chunk from an exact-length hexadecimal payload. |
 | `QUIT` | `+OK` | Close the session after the response. |
+
+The `INFO` payload contains newline-terminated `key=value` records in this
+fixed order: `regiondb_version`, `cache_hits`, `cache_misses`, `loaded_chunks`,
+`dirty_chunks`, `evictions`, `wal_flushes`, and `checkpoints`. The version is
+`1`; counters and gauges are unsigned decimal integers. No unbounded or
+backend-defined keys are included.
 
 `CHUNK` and `CHUNKBIN` return `NOT_FOUND` when their chunk file is absent.
 Storage failures are reported with the `STORAGE` code. The binary byte count

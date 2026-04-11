@@ -27,7 +27,7 @@ func testIntegrationTCPCommandLifecycle(t *testing.T) {
 		_ = connection.Close()
 	}()
 
-	request := "PING\r\nAUTH secret\r\nSET -1 2 9\r\nEXISTS -1 2\r\nGET -1 2\r\nCHUNK -1 1\r\nQUIT\r\n"
+	request := "PING\r\nAUTH secret\r\nSET -1 2 9\r\nINFO\r\nEXISTS -1 2\r\nGET -1 2\r\nCHUNK -1 1\r\nQUIT\r\n"
 	if _, err := io.WriteString(connection, request); err != nil {
 		t.Fatalf("write request: %v", err)
 	}
@@ -37,6 +37,16 @@ func testIntegrationTCPCommandLifecycle(t *testing.T) {
 		"-ERR NOAUTH authentication required\r\n",
 		"+OK\r\n",
 		"+OK\r\n",
+		"$118\r\n",
+		"regiondb_version=1\n",
+		"cache_hits=0\n",
+		"cache_misses=1\n",
+		"loaded_chunks=1\n",
+		"dirty_chunks=0\n",
+		"evictions=0\n",
+		"wal_flushes=0\n",
+		"checkpoints=0\n",
+		"\r\n",
 		"+OK 1\r\n",
 		"$1\r\n",
 		"9\r\n",

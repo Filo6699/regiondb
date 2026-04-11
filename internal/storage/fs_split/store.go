@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/Filo6699/regiondb/internal/bitcodec"
 	"github.com/Filo6699/regiondb/internal/geometry"
@@ -39,8 +40,19 @@ type Store struct {
 	walBytes           int64
 	walUnsyncedUpdates uint64
 	walRecordBuffer    []byte
+	walFlushCount      atomic.Uint64
+	checkpointCount    atomic.Uint64
 	closed             bool
 	mu                 sync.RWMutex
+}
+
+func (s *Store) RuntimeStats() storage.RuntimeStats {
+	stats := s.cache.runtimeStats()
+	// fs_split writes each chunk before admitting it to the cache, so it has
+	// no dirty resident state to report.
+	stats.WALFlushes = s.walFlushCount.Load()
+	stats.Checkpoints = s.checkpointCount.Load()
+	return stats
 }
 
 func Open(root string, g geometry.Geometry) (*Store, error) {

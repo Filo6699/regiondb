@@ -16,12 +16,15 @@ type cacheEntry struct {
 }
 
 type chunkCache struct {
-	geometry geometry.Geometry
-	max      int
-	mu       sync.Mutex
-	entries  map[geometry.Coord]*list.Element
-	recent   *list.List
-	loaded   atomic.Int64
+	geometry  geometry.Geometry
+	max       int
+	mu        sync.Mutex
+	entries   map[geometry.Coord]*list.Element
+	recent    *list.List
+	loaded    atomic.Int64
+	hits      atomic.Uint64
+	misses    atomic.Uint64
+	evictions atomic.Uint64
 }
 
 func newChunkCache(g geometry.Geometry, max int) *chunkCache {
@@ -39,8 +42,10 @@ func (cache *chunkCache) get(coord geometry.Coord) (*storage.Chunk, bool, error)
 
 	element, found := cache.entries[coord]
 	if !found {
+		cache.misses.Add(1)
 		return nil, false, nil
 	}
+	cache.hits.Add(1)
 	cache.recent.MoveToFront(element)
 	entry := element.Value.(*cacheEntry)
 	chunk, err := storage.ChunkFromBytes(cache.geometry, entry.payload)
@@ -88,6 +93,7 @@ func (cache *chunkCache) put(coord geometry.Coord, payload []byte) error {
 	copy(entry.payload, payload)
 	cache.recent.MoveToFront(oldest)
 	cache.entries[coord] = oldest
+	cache.evictions.Add(1)
 	return nil
 }
 
@@ -106,4 +112,13 @@ func (cache *chunkCache) remove(coord geometry.Coord) {
 
 func (cache *chunkCache) loadedChunks() int {
 	return int(cache.loaded.Load())
+}
+
+func (cache *chunkCache) runtimeStats() storage.RuntimeStats {
+	return storage.RuntimeStats{
+		CacheHits:    cache.hits.Load(),
+		CacheMisses:  cache.misses.Load(),
+		LoadedChunks: uint64(cache.loaded.Load()),
+		Evictions:    cache.evictions.Load(),
+	}
 }

@@ -1120,6 +1120,46 @@ func TestStoreEvictsAndReloadsChunks(t *testing.T) {
 	}
 }
 
+func TestStoreRuntimeStats(t *testing.T) {
+	t.Parallel()
+
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 2})
+	store := mustOpenWithOptions(t, testTempDir(t), g, Options{
+		Durability:        DurabilityFsyncWAL,
+		CheckpointRecords: 2,
+		CheckpointBytes:   1 << 20,
+		MaxLoadedChunks:   1,
+	})
+	first := geometry.Coord{X: 1}
+	second := geometry.Coord{X: 2}
+	missing := geometry.Coord{X: 3}
+
+	if err := store.WriteChunk(first, mustChunk(t, g)); err != nil {
+		t.Fatalf("WriteChunk(%v): %v", first, err)
+	}
+	if _, err := store.ReadChunk(first); err != nil {
+		t.Fatalf("ReadChunk(%v): %v", first, err)
+	}
+	if _, err := store.ReadChunk(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ReadChunk(%v) error = %v, want os.ErrNotExist", missing, err)
+	}
+	if err := store.WriteChunk(second, mustChunk(t, g)); err != nil {
+		t.Fatalf("WriteChunk(%v): %v", second, err)
+	}
+
+	want := storage.RuntimeStats{
+		CacheHits:    1,
+		CacheMisses:  1,
+		LoadedChunks: 1,
+		Evictions:    1,
+		WALFlushes:   3,
+		Checkpoints:  1,
+	}
+	if got := store.RuntimeStats(); got != want {
+		t.Fatalf("RuntimeStats() = %+v, want %+v", got, want)
+	}
+}
+
 func TestStoreCacheReturnsIndependentChunks(t *testing.T) {
 	t.Parallel()
 
