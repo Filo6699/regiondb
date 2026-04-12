@@ -76,9 +76,13 @@ performance claims or CI thresholds.
 The project requires Go 1.24 or later.
 
 ```sh
-go test ./...
-go build ./...
+scripts/test/quick.sh
 ```
+
+The quick gate runs vet, tests, and builds and is used by the pull-request CI
+matrix. `scripts/test/full.sh` adds the race detector, uncached tests, and the
+existing integration, crash, and repeated stress suites; release automation
+runs that full gate. Neither gate applies a benchmark throughput threshold.
 
 ## License
 

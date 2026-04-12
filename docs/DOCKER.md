@@ -47,6 +47,39 @@ docker compose --profile test down
 
 The test profile uses the same persistent volume as the normal service.
 
+## Runtime sizing and performance boundaries
+
+The image and Compose file do not set CPU or memory limits and do not
+automatically tune regiondb from container limits. Set container resource
+limits in the deployment environment, then size the existing server options
+for that budget. In particular:
+
+- `-max-loaded-chunks` bounds resident chunk payloads, but the process also
+  needs memory for cache metadata, WAL buffers, queued connections, command
+  buffers, and the Go runtime.
+- `-workers` bounds concurrently served connections. `-accept-queue` bounds
+  accepted connections waiting for a worker, and each active or queued
+  connection consumes socket and process resources.
+- `-max-line-bytes` bounds text command input, but binary chunk payload size is
+  determined by the configured geometry.
+
+Pass option overrides after the image name with `docker run`, or replace the
+Compose service `command`. Keep geometry identical when reopening an existing
+data volume.
+
+Container storage is part of the measured system. Named volumes and bind
+mounts can have materially different latency and durability behavior across
+Docker Desktop, native Linux, storage drivers, and host filesystems. The
+selected `-durability` mode defines which sync operations regiondb requests;
+Docker and the underlying storage stack determine how those requests reach
+persistent media. Benchmark the intended volume, durability mode, geometry,
+cache size, and resource limits on the target host.
+
+The healthcheck and test profile prove authenticated startup and a basic
+request path only. They are not load tests, readiness guarantees under
+sustained traffic, or performance thresholds. Scenario benchmark results are
+comparable only when the recorded runtime and storage conditions also match.
+
 ## Docker CLI
 
 Build and run the image without Compose:
