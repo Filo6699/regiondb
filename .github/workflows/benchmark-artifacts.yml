@@ -57,6 +57,10 @@ jobs:
           cache: true
           cache-dependency-path: go.mod
 
+      - name: Run full release gate
+        if: github.event_name == 'release'
+        run: scripts/test/full.sh
+
       - name: Build benchmark
         run: go build -trimpath -o benchmark-runner ./cmd/regiondb-direct-bench
 

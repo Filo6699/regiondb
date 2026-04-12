@@ -35,13 +35,10 @@ jobs:
         include:
           - name: ubuntu
             os: ubuntu-latest
-            test-packages: ./...
           - name: macos
             os: macos-latest
-            test-packages: ./...
           - name: windows
             os: windows-latest
-            test-packages: ./...
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out source
@@ -58,21 +55,18 @@ jobs:
         if: runner.os == 'Windows'
         run: go env
 
-      - name: Vet
-        run: go vet ./...
+      - name: Run quick gate
+        shell: bash
+        env:
+          REGIONDB_BUILD_VERBOSE: ${{ runner.os == 'Windows' && '1' || '0' }}
+          REGIONDB_TEST_JSON_OUTPUT: ${{ runner.os == 'Windows' && 'windows-test-results.json' || '' }}
+        run: scripts/test/quick.sh
 
-      - name: Test
-        if: runner.os != 'Windows'
-        run: go test ${{ matrix.test-packages }}
-
-      - name: Test with failure annotations
-        if: runner.os == 'Windows'
+      - name: Annotate Windows test failures
+        if: failure() && runner.os == 'Windows'
         shell: pwsh
         run: |
-          go test -json ${{ matrix.test-packages }} |
-            Tee-Object -FilePath windows-test-results.json
-          $testExitCode = $LASTEXITCODE
-          if ($testExitCode -ne 0) {
+          if (Test-Path windows-test-results.json) {
             Get-Content windows-test-results.json | ForEach-Object {
               $event = $_ | ConvertFrom-Json
               if ($event.Action -eq "fail" -and $event.Test) {
@@ -82,7 +76,6 @@ jobs:
               }
             }
           }
-          exit $testExitCode
 
       - name: Upload Windows test logs
         if: failure() && runner.os == 'Windows'
@@ -92,9 +85,6 @@ jobs:
           path: windows-test-results.json
           if-no-files-found: warn
           retention-days: 7
-
-      - name: Build
-        run: go build ${{ runner.os == 'Windows' && '-v' || '' }} ./...
 
   race:
     name: race
