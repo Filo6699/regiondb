@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Filo6699/regiondb/internal/geometry"
 	"github.com/Filo6699/regiondb/internal/storage"
@@ -1204,7 +1205,7 @@ func TestStoreRejectsSecondWriter(t *testing.T) {
 	}
 	closeStore(t, first)
 
-	second := mustOpen(t, root, g)
+	second := mustOpenAfterWriterRelease(t, root, g)
 	closeStore(t, second)
 }
 
@@ -1388,6 +1389,39 @@ func mustOpen(t *testing.T, root string, g geometry.Geometry) *Store {
 		closeStore(t, store)
 	})
 	return store
+}
+
+func mustOpenAfterWriterRelease(t *testing.T, root string, g geometry.Geometry) *Store {
+	t.Helper()
+
+	const (
+		retryTimeout = 2 * time.Second
+		retryDelay   = 10 * time.Millisecond
+	)
+	deadline := time.NewTimer(retryTimeout)
+	defer deadline.Stop()
+	retry := time.NewTicker(retryDelay)
+	defer retry.Stop()
+
+	var lastErr error
+	for {
+		store, err := Open(root, g)
+		if err == nil {
+			t.Cleanup(func() {
+				closeStore(t, store)
+			})
+			return store
+		}
+		if !errors.Is(err, ErrWriterLocked) {
+			t.Fatalf("Open() after writer release: %v", err)
+		}
+		lastErr = err
+		select {
+		case <-retry.C:
+		case <-deadline.C:
+			t.Fatalf("Open() after writer release timed out; last error: %v", lastErr)
+		}
+	}
 }
 
 func mustChunk(t *testing.T, g geometry.Geometry) *storage.Chunk {
