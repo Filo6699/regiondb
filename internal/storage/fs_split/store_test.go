@@ -1208,6 +1208,62 @@ func TestStoreRejectsSecondWriter(t *testing.T) {
 	closeStore(t, second)
 }
 
+func TestConcurrentStoresUseIsolatedDataDirectories(t *testing.T) {
+	t.Parallel()
+
+	const storeCount = 8
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 1})
+	roots := make([]string, storeCount)
+	for index := range roots {
+		roots[index] = testTempDir(t)
+	}
+
+	type openResult struct {
+		index int
+		store *Store
+		err   error
+	}
+	start := make(chan struct{})
+	results := make(chan openResult, storeCount)
+	for index, root := range roots {
+		go func(index int, root string) {
+			<-start
+			store, err := Open(root, g)
+			results <- openResult{index: index, store: store, err: err}
+		}(index, root)
+	}
+	close(start)
+
+	stores := make([]*Store, storeCount)
+	for range storeCount {
+		result := <-results
+		if result.err != nil {
+			t.Errorf("Open(store %d): %v", result.index, result.err)
+			continue
+		}
+		stores[result.index] = result.store
+	}
+
+	sessions := make(map[string]int, storeCount)
+	for index, store := range stores {
+		if store == nil {
+			continue
+		}
+		if store.root != roots[index] {
+			t.Errorf("store %d root = %q, want %q", index, store.root, roots[index])
+		}
+		if store.writerLock.owner.PID != os.Getpid() {
+			t.Errorf("store %d owner PID = %d, want %d", index, store.writerLock.owner.PID, os.Getpid())
+		}
+		sessionID := store.writerLock.owner.SessionID
+		if previous, exists := sessions[sessionID]; exists {
+			t.Errorf("stores %d and %d share writer session %q", previous, index, sessionID)
+		}
+		sessions[sessionID] = index
+		closeStore(t, store)
+	}
+}
+
 func TestStoreAllowsReadOnlyProcessesWithWriter(t *testing.T) {
 	t.Parallel()
 
