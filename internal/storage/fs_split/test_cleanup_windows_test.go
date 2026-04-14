@@ -13,10 +13,7 @@ import (
 func testTempDir(t *testing.T) string {
 	t.Helper()
 
-	directory, err := os.MkdirTemp("", "regiondb-test-*")
-	if err != nil {
-		t.Fatalf("create temporary directory: %v", err)
-	}
+	directory := t.TempDir()
 	t.Cleanup(func() {
 		err := removeTestDirectoryWithRetry(
 			func() error { return os.RemoveAll(directory) },
