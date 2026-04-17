@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -18,9 +19,10 @@ import (
 )
 
 const (
-	fileMagic    = "RGDBSPL1"
-	headerBytes  = 44
-	checksumSize = 4
+	fileMagic            = "RGDBSPL1"
+	headerBytes          = 44
+	checksumSize         = 4
+	chunkTemporaryPrefix = ".regiondb-chunk-"
 )
 
 var (
@@ -30,21 +32,33 @@ var (
 )
 
 type Store struct {
-	root               string
-	geometry           geometry.Geometry
-	options            Options
-	wal                *os.File
-	writerLock         *writerLock
-	cache              *chunkCache
-	walRecords         uint64
-	walBytes           int64
-	walUnsyncedUpdates uint64
-	walRecordBuffer    []byte
-	walFlushCount      atomic.Uint64
-	checkpointCount    atomic.Uint64
-	closed             bool
-	mu                 sync.RWMutex
+	root                 string
+	geometry             geometry.Geometry
+	options              Options
+	wal                  *os.File
+	writerLock           *writerLock
+	cache                *chunkCache
+	walRecords           uint64
+	walBytes             int64
+	walUnsyncedUpdates   uint64
+	walRecordBuffer      []byte
+	walFlushCount        atomic.Uint64
+	checkpointCount      atomic.Uint64
+	closed               bool
+	atomicWriteFailpoint func(atomicWriteBoundary) error
+	mu                   sync.RWMutex
 }
+
+type atomicWriteBoundary string
+
+const (
+	atomicWriteTemporaryCreated    atomicWriteBoundary = "temporary-created"
+	atomicWriteDataWritten         atomicWriteBoundary = "data-written"
+	atomicWriteDataSynced          atomicWriteBoundary = "data-synced"
+	atomicWriteTemporaryClosed     atomicWriteBoundary = "temporary-closed"
+	atomicWriteDestinationReplaced atomicWriteBoundary = "destination-replaced"
+	atomicWriteDirectorySynced     atomicWriteBoundary = "directory-synced"
+)
 
 func (s *Store) RuntimeStats() storage.RuntimeStats {
 	stats := s.cache.runtimeStats()
@@ -104,6 +118,10 @@ func OpenWithOptions(root string, g geometry.Geometry, options Options) (_ *Stor
 			}
 		}
 	}()
+
+	if err := reclaimStaleChunkTemporaryFiles(absoluteRoot); err != nil {
+		return nil, fmt.Errorf("reclaim stale chunk temporary files: %w", err)
+	}
 
 	wal, err := os.OpenFile(filepath.Join(absoluteRoot, walName), os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
@@ -348,14 +366,34 @@ func (s *Store) persistChunk(coord geometry.Coord, payload []byte, syncData bool
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return fmt.Errorf("create large-chunk directory: %w", err)
 	}
-	if err := writeAtomic(path, s.encode(coord, payload), syncData); err != nil {
+	if err := writeAtomic(path, s.encode(coord, payload), syncData, s.atomicWriteFailpoint); err != nil {
 		return err
 	}
 	return nil
 }
 
-func writeAtomic(path string, data []byte, syncData bool) (returnErr error) {
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".regiondb-chunk-*")
+func reclaimStaleChunkTemporaryFiles(root string) error {
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), chunkTemporaryPrefix) {
+			return nil
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove %q: %w", path, err)
+		}
+		return nil
+	})
+}
+
+func writeAtomic(
+	path string,
+	data []byte,
+	syncData bool,
+	failpoint func(atomicWriteBoundary) error,
+) (returnErr error) {
+	temporary, err := os.CreateTemp(filepath.Dir(path), chunkTemporaryPrefix+"*")
 	if err != nil {
 		return fmt.Errorf("create temporary file: %w", err)
 	}
@@ -378,26 +416,57 @@ func writeAtomic(path string, data []byte, syncData bool) (returnErr error) {
 	if err := temporary.Chmod(0o600); err != nil {
 		return fmt.Errorf("set temporary file permissions: %w", err)
 	}
+	if err := runAtomicWriteFailpoint(failpoint, atomicWriteTemporaryCreated); err != nil {
+		return err
+	}
 	if _, err := io.Copy(temporary, bytes.NewReader(data)); err != nil {
 		return fmt.Errorf("write temporary file: %w", err)
+	}
+	if err := runAtomicWriteFailpoint(failpoint, atomicWriteDataWritten); err != nil {
+		return err
 	}
 	if syncData {
 		if err := temporary.Sync(); err != nil {
 			return fmt.Errorf("sync temporary file: %w", err)
+		}
+		if err := runAtomicWriteFailpoint(failpoint, atomicWriteDataSynced); err != nil {
+			return err
 		}
 	}
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("close temporary file: %w", err)
 	}
 	closed = true
+	if err := runAtomicWriteFailpoint(failpoint, atomicWriteTemporaryClosed); err != nil {
+		return err
+	}
 	if err := replaceFile(temporaryPath, path, syncData); err != nil {
 		return fmt.Errorf("replace destination: %w", err)
 	}
 	renamed = true
+	if err := runAtomicWriteFailpoint(failpoint, atomicWriteDestinationReplaced); err != nil {
+		return err
+	}
 	if syncData {
 		if err := syncParentDirectory(filepath.Dir(path)); err != nil {
 			return fmt.Errorf("sync parent directory: %w", err)
 		}
+		if err := runAtomicWriteFailpoint(failpoint, atomicWriteDirectorySynced); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func runAtomicWriteFailpoint(
+	failpoint func(atomicWriteBoundary) error,
+	boundary atomicWriteBoundary,
+) error {
+	if failpoint == nil {
+		return nil
+	}
+	if err := failpoint(boundary); err != nil {
+		return fmt.Errorf("atomic write failpoint %q: %w", boundary, err)
 	}
 	return nil
 }

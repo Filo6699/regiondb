@@ -202,7 +202,7 @@ func (lock *writerLock) writeOwner() error {
 	}
 	encoded = append(encoded, '\n')
 	path := filepath.Join(lock.directory, lockOwnerName)
-	if err := writeAtomic(path, encoded, false); err != nil {
+	if err := writeAtomic(path, encoded, false, nil); err != nil {
 		return fmt.Errorf("write writer owner metadata: %w", err)
 	}
 	return nil

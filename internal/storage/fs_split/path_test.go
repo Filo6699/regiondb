@@ -72,7 +72,7 @@ func TestWriteAtomicReleasesFileHandlesBeforeReturn(t *testing.T) {
 	root := testTempDir(t)
 	path := filepath.Join(root, "chunk.rdb")
 	payload := []byte("packed chunk")
-	if err := writeAtomic(path, payload, false); err != nil {
+	if err := writeAtomic(path, payload, false, nil); err != nil {
 		t.Fatalf("writeAtomic(): %v", err)
 	}
 

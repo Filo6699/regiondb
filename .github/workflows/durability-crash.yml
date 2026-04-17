@@ -1,0 +1,54 @@
+name: Durability crash
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  durability-crash:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu
+            os: ubuntu-latest
+          - name: macos
+            os: macos-latest
+          - name: windows
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+        with:
+          go-version: "1.24.x"
+          cache: true
+          cache-dependency-path: go.mod
+
+      - name: Run child-process crash suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./internal/storage/fs_split \
+            -run '^TestCrash' \
+            -count=1 \
+            -v \
+            2>&1 | tee "$RUNNER_TEMP/durability-crash.log"
+
+      - name: Upload crash log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: durability-crash-${{ matrix.name }}-${{ github.sha }}
+          path: ${{ runner.temp }}/durability-crash.log
+          if-no-files-found: error
+          retention-days: 14
