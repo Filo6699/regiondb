@@ -159,6 +159,9 @@ func (s *Store) Close() error {
 	s.closed = true
 	var result error
 	if s.wal != nil {
+		// The pending tail has to be flushed before the handle is released:
+		// os.File.Sync rejects a closed file, so no platform offers a
+		// close-then-flush ordering.
 		if s.options.Durability == DurabilityFsyncWAL && s.walUnsyncedUpdates != 0 {
 			if err := s.syncWAL(); err != nil {
 				result = errors.Join(result, err)
