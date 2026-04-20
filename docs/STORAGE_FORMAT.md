@@ -107,6 +107,13 @@ before truncating and synchronizing the WAL.
   directory after the rename; Windows uses a write-through replacement. WAL
   truncation is also synchronized.
 
+A synchronized write is acknowledged only when the new directory entry is
+covered by one of those two paths. If a filesystem reports that a directory
+handle cannot be flushed and the platform replacement does not commit the
+entry itself, the write fails instead of acknowledging the missing guarantee.
+A directory that cannot be opened or a failing flush stays an ordinary write
+error and is not treated as a missing capability.
+
 These modes describe single-host filesystem calls. Hardware and filesystem
 behavior can impose weaker guarantees. There is no tombstone or alternate
 backend compatibility contract.

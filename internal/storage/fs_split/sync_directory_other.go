@@ -2,7 +2,15 @@
 
 package fs_split
 
-import "os"
+import (
+	"fmt"
+	"os"
+)
+
+// replaceCommitsDirectoryEntry is false because a POSIX rename gives no
+// guarantee that the new directory entry reached stable storage, so a
+// synchronized write has to flush the parent directory handle itself.
+const replaceCommitsDirectoryEntry = false
 
 func syncParentDirectory(path string) (returnErr error) {
 	directory, err := os.Open(path)
@@ -14,5 +22,11 @@ func syncParentDirectory(path string) (returnErr error) {
 			returnErr = err
 		}
 	}()
-	return directory.Sync()
+	if err := directory.Sync(); err != nil {
+		if isUnsupportedDirectorySyncError(err) {
+			return fmt.Errorf("%w: %v", errDirectorySyncUnsupported, err)
+		}
+		return err
+	}
+	return nil
 }
