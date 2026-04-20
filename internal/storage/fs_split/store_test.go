@@ -1194,18 +1194,55 @@ func TestStoreCacheReturnsIndependentChunks(t *testing.T) {
 	}
 }
 
+// Rejecting a second writer is a deterministic outcome, so nothing in this case
+// may depend on a background timer. The heartbeat rewrites owner.json through an
+// atomic replacement on a five-second tick, which on Windows means an unrelated
+// process is deleting and recreating the very file the second writer reads. Both
+// stores are therefore opened without a heartbeat, and the case pins the
+// ownership metadata it asserts on.
 func TestStoreRejectsSecondWriter(t *testing.T) {
 	t.Parallel()
 
 	root := testTempDir(t)
 	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 1})
-	first := mustOpen(t, root, g)
-	if _, err := Open(root, g); !errors.Is(err, ErrWriterLocked) {
-		t.Fatalf("second Open() error = %v, want ErrWriterLocked", err)
+	first := mustOpenWithoutWriterHeartbeat(t, root, g)
+	assertNoWriterHeartbeat(t, first)
+
+	ownerPath := filepath.Join(root, lockName, lockOwnerName)
+	owner, found, err := readOwnerMetadata(ownerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("writer owner metadata is missing")
+	}
+	if !owner.HeartbeatAt.Equal(owner.StartedAt) {
+		t.Fatalf("owner metadata was rewritten before the assertion: %+v", owner)
+	}
+
+	if _, err := openStoreWithoutWriterHeartbeat(root, g, Options{}); !errors.Is(err, ErrWriterLocked) {
+		t.Fatalf("second open error = %v, want ErrWriterLocked", err)
+	}
+	observed, found, err := readOwnerMetadata(ownerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || observed != owner {
+		t.Fatalf("owner metadata changed during the rejection: %+v, want %+v", observed, owner)
 	}
 	closeStore(t, first)
+	if _, err := os.Stat(ownerPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("owner metadata remains after release: %v", err)
+	}
 
-	second := mustOpenAfterWriterRelease(t, root, g)
+	// The bounded retry covers operating-system lock release, not the heartbeat:
+	// Windows can still report the guard as locked for a moment after the handle
+	// is closed.
+	second := mustOpenWithoutWriterHeartbeatAfterRelease(t, root, g)
+	assertNoWriterHeartbeat(t, second)
+	if second.writerLock.owner.SessionID == owner.SessionID {
+		t.Fatal("released writer session id was reused")
+	}
 	closeStore(t, second)
 }
 
@@ -1229,7 +1266,9 @@ func TestConcurrentStoresUseIsolatedDataDirectories(t *testing.T) {
 	for index, root := range roots {
 		go func(index int, root string) {
 			<-start
-			store, err := Open(root, g)
+			// Heartbeat-free, because this case reads the ownership metadata each
+			// store recorded at acquisition; a tick would rewrite it concurrently.
+			store, err := openStoreWithoutWriterHeartbeat(root, g, Options{})
 			results <- openResult{index: index, store: store, err: err}
 		}(index, root)
 	}
@@ -1261,6 +1300,7 @@ func TestConcurrentStoresUseIsolatedDataDirectories(t *testing.T) {
 			t.Errorf("stores %d and %d share writer session %q", previous, index, sessionID)
 		}
 		sessions[sessionID] = index
+		assertNoWriterHeartbeat(t, store)
 		closeStore(t, store)
 	}
 }
@@ -1391,7 +1431,48 @@ func mustOpen(t *testing.T, root string, g geometry.Geometry) *Store {
 	return store
 }
 
-func mustOpenAfterWriterRelease(t *testing.T, root string, g geometry.Geometry) *Store {
+// acquireWriterLockWithoutHeartbeat owns a data directory exactly like the
+// production path, minus the background tick: acquireWriterLockWithConfig starts
+// no goroutine when no heartbeat channel is supplied, so ownership metadata is
+// written once at acquisition and never rewritten.
+func acquireWriterLockWithoutHeartbeat(path string) (*writerLock, error) {
+	return acquireWriterLockWithConfig(path, lockConfig{now: time.Now})
+}
+
+func openStoreWithoutWriterHeartbeat(root string, g geometry.Geometry, options Options) (*Store, error) {
+	return openStore(root, g, options, acquireWriterLockWithoutHeartbeat)
+}
+
+func mustOpenWithoutWriterHeartbeat(t *testing.T, root string, g geometry.Geometry) *Store {
+	t.Helper()
+
+	store, err := openStoreWithoutWriterHeartbeat(root, g, Options{})
+	if err != nil {
+		t.Fatalf("open store without a writer heartbeat: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close(): %v", err)
+		}
+	})
+	return store
+}
+
+func assertNoWriterHeartbeat(t *testing.T, store *Store) {
+	t.Helper()
+
+	select {
+	case <-store.writerLock.done:
+	default:
+		t.Fatal("writer lock is running a background heartbeat")
+	}
+}
+
+// mustOpenWithoutWriterHeartbeatAfterRelease keeps the bounded retry a released
+// writer lock still needs on Windows, where the operating system can report the
+// guard as locked for a moment after its handle is closed. Only ErrWriterLocked
+// is retried, the deadline bounds the wait, and the last error is reported.
+func mustOpenWithoutWriterHeartbeatAfterRelease(t *testing.T, root string, g geometry.Geometry) *Store {
 	t.Helper()
 
 	const (
@@ -1405,7 +1486,7 @@ func mustOpenAfterWriterRelease(t *testing.T, root string, g geometry.Geometry) 
 
 	var lastErr error
 	for {
-		store, err := Open(root, g)
+		store, err := openStoreWithoutWriterHeartbeat(root, g, Options{})
 		if err == nil {
 			t.Cleanup(func() {
 				closeStore(t, store)
@@ -1413,13 +1494,13 @@ func mustOpenAfterWriterRelease(t *testing.T, root string, g geometry.Geometry) 
 			return store
 		}
 		if !errors.Is(err, ErrWriterLocked) {
-			t.Fatalf("Open() after writer release: %v", err)
+			t.Fatalf("open after writer release: %v", err)
 		}
 		lastErr = err
 		select {
 		case <-retry.C:
 		case <-deadline.C:
-			t.Fatalf("Open() after writer release timed out; last error: %v", lastErr)
+			t.Fatalf("open after writer release timed out; last error: %v", lastErr)
 		}
 	}
 }
