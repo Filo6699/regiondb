@@ -1,0 +1,74 @@
+regiondb experimental region layout A/B benchmark
+measurement_date=2026-07-30
+hardware=11th Gen Intel(R) Core(TM) i5-11300H @ 3.10GHz
+os=Arch Linux, Linux 6.18.9-arch1-2
+go=go1.24.13 linux/amd64
+
+commit=6c955c817256eeaa4a43b63228c47bebe562ca88
+command=go test -run '^$' -bench '^BenchmarkLayout$' -benchmem -count=10 ./internal/storage/fs_region
+goos: linux
+goarch: amd64
+pkg: github.com/Filo6699/regiondb/internal/storage/fs_region
+cpu: 11th Gen Intel(R) Core(TM) i5-11300H @ 3.10GHz
+BenchmarkLayout/workload=read/layout=fs_region_v1-8         	 2281783	       535.6 ns/op	     384 B/op	       3 allocs/op
+BenchmarkLayout/workload=read/layout=fs_region_v1-8         	 2345325	       521.8 ns/op	     384 B/op	       3 allocs/op
+BenchmarkLayout/workload=read/layout=fs_region_v1-8         	 2331816	       531.5 ns/op	     384 B/op	       3 allocs/op
+BenchmarkLayout/workload=read/layout=fs_region_v1-8         	 2160691	       517.8 ns/op	     384 B/op	       3 allocs/op
+BenchmarkLayout/workload=read/layout=fs_region_v1-8         	 2325712	       528.7 ns/op	     384 B/op	       3 allocs/op
+BenchmarkLayout/workload=read/layout=fs_region_v1-8         	 2255785	       573.1 ns/op	     384 B/op	       3 allocs/op
+BenchmarkLayout/workload=read/layout=fs_region_v1-8         	 2312276	       516.2 ns/op	     384 B/op	       3 allocs/op
+BenchmarkLayout/workload=read/layout=fs_region_v1-8         	 2282511	       590.4 ns/op	     384 B/op	       3 allocs/op
+BenchmarkLayout/workload=read/layout=fs_region_v1-8         	 2436856	       530.1 ns/op	     384 B/op	       3 allocs/op
+BenchmarkLayout/workload=read/layout=fs_region_v1-8         	 2237727	       532.8 ns/op	     384 B/op	       3 allocs/op
+BenchmarkLayout/workload=read/layout=fs_split_v1-8          	 6719953	       197.6 ns/op	     224 B/op	       2 allocs/op
+BenchmarkLayout/workload=read/layout=fs_split_v1-8          	 6876946	       199.2 ns/op	     224 B/op	       2 allocs/op
+BenchmarkLayout/workload=read/layout=fs_split_v1-8          	 6407642	       205.2 ns/op	     224 B/op	       2 allocs/op
+BenchmarkLayout/workload=read/layout=fs_split_v1-8          	 6208782	       195.2 ns/op	     224 B/op	       2 allocs/op
+BenchmarkLayout/workload=read/layout=fs_split_v1-8          	 6077856	       191.3 ns/op	     224 B/op	       2 allocs/op
+BenchmarkLayout/workload=read/layout=fs_split_v1-8          	 6476408	       189.4 ns/op	     224 B/op	       2 allocs/op
+BenchmarkLayout/workload=read/layout=fs_split_v1-8          	 5840619	       190.4 ns/op	     224 B/op	       2 allocs/op
+BenchmarkLayout/workload=read/layout=fs_split_v1-8          	 6307580	       198.1 ns/op	     224 B/op	       2 allocs/op
+BenchmarkLayout/workload=read/layout=fs_split_v1-8          	 6223273	       200.3 ns/op	     224 B/op	       2 allocs/op
+BenchmarkLayout/workload=read/layout=fs_split_v1-8          	 6387003	       192.2 ns/op	     224 B/op	       2 allocs/op
+BenchmarkLayout/workload=write/layout=fs_region_v1-8        	 1403044	       842.0 ns/op	     160 B/op	       1 allocs/op
+BenchmarkLayout/workload=write/layout=fs_region_v1-8        	 1422481	       856.9 ns/op	     160 B/op	       1 allocs/op
+BenchmarkLayout/workload=write/layout=fs_region_v1-8        	 1438491	       842.8 ns/op	     160 B/op	       1 allocs/op
+BenchmarkLayout/workload=write/layout=fs_region_v1-8        	 1423838	       831.7 ns/op	     160 B/op	       1 allocs/op
+BenchmarkLayout/workload=write/layout=fs_region_v1-8        	 1377198	       867.5 ns/op	     160 B/op	       1 allocs/op
+BenchmarkLayout/workload=write/layout=fs_region_v1-8        	 1424577	       830.4 ns/op	     160 B/op	       1 allocs/op
+BenchmarkLayout/workload=write/layout=fs_region_v1-8        	 1408914	       848.8 ns/op	     160 B/op	       1 allocs/op
+BenchmarkLayout/workload=write/layout=fs_region_v1-8        	 1422402	       860.0 ns/op	     160 B/op	       1 allocs/op
+BenchmarkLayout/workload=write/layout=fs_region_v1-8        	 1423957	       833.7 ns/op	     160 B/op	       1 allocs/op
+BenchmarkLayout/workload=write/layout=fs_region_v1-8        	 1415413	       860.3 ns/op	     160 B/op	       1 allocs/op
+BenchmarkLayout/workload=write/layout=fs_split_v1-8         	   84626	     13909 ns/op	    1789 B/op	      22 allocs/op
+BenchmarkLayout/workload=write/layout=fs_split_v1-8         	   85790	     14471 ns/op	    1788 B/op	      22 allocs/op
+BenchmarkLayout/workload=write/layout=fs_split_v1-8         	   89716	     13590 ns/op	    1788 B/op	      22 allocs/op
+BenchmarkLayout/workload=write/layout=fs_split_v1-8         	   76185	     14345 ns/op	    1789 B/op	      22 allocs/op
+BenchmarkLayout/workload=write/layout=fs_split_v1-8         	   87519	     13878 ns/op	    1788 B/op	      22 allocs/op
+BenchmarkLayout/workload=write/layout=fs_split_v1-8         	   76262	     14098 ns/op	    1789 B/op	      22 allocs/op
+BenchmarkLayout/workload=write/layout=fs_split_v1-8         	   89805	     13818 ns/op	    1788 B/op	      22 allocs/op
+BenchmarkLayout/workload=write/layout=fs_split_v1-8         	   76543	     14009 ns/op	    1789 B/op	      22 allocs/op
+BenchmarkLayout/workload=write/layout=fs_split_v1-8         	   87192	     13793 ns/op	    1788 B/op	      22 allocs/op
+BenchmarkLayout/workload=write/layout=fs_split_v1-8         	   76878	     14206 ns/op	    1789 B/op	      22 allocs/op
+BenchmarkLayout/workload=mixed/layout=fs_region_v1-8        	 1976967	       597.3 ns/op	     339 B/op	       2 allocs/op
+BenchmarkLayout/workload=mixed/layout=fs_region_v1-8        	 1974507	       628.2 ns/op	     339 B/op	       2 allocs/op
+BenchmarkLayout/workload=mixed/layout=fs_region_v1-8        	 1959726	       611.7 ns/op	     339 B/op	       2 allocs/op
+BenchmarkLayout/workload=mixed/layout=fs_region_v1-8        	 1881297	       622.9 ns/op	     339 B/op	       2 allocs/op
+BenchmarkLayout/workload=mixed/layout=fs_region_v1-8        	 1844025	       614.0 ns/op	     339 B/op	       2 allocs/op
+BenchmarkLayout/workload=mixed/layout=fs_region_v1-8        	 1863636	       615.6 ns/op	     339 B/op	       2 allocs/op
+BenchmarkLayout/workload=mixed/layout=fs_region_v1-8        	 1956918	       648.7 ns/op	     339 B/op	       2 allocs/op
+BenchmarkLayout/workload=mixed/layout=fs_region_v1-8        	 1959049	       635.1 ns/op	     339 B/op	       2 allocs/op
+BenchmarkLayout/workload=mixed/layout=fs_region_v1-8        	 1981663	       612.8 ns/op	     339 B/op	       2 allocs/op
+BenchmarkLayout/workload=mixed/layout=fs_region_v1-8        	 1990242	       638.6 ns/op	     339 B/op	       2 allocs/op
+BenchmarkLayout/workload=mixed/layout=fs_split_v1-8         	  384550	      3247 ns/op	     535 B/op	       5 allocs/op
+BenchmarkLayout/workload=mixed/layout=fs_split_v1-8         	  409291	      3088 ns/op	     535 B/op	       5 allocs/op
+BenchmarkLayout/workload=mixed/layout=fs_split_v1-8         	  379934	      2994 ns/op	     535 B/op	       5 allocs/op
+BenchmarkLayout/workload=mixed/layout=fs_split_v1-8         	  422683	      3110 ns/op	     536 B/op	       6 allocs/op
+BenchmarkLayout/workload=mixed/layout=fs_split_v1-8         	  412830	      3221 ns/op	     535 B/op	       5 allocs/op
+BenchmarkLayout/workload=mixed/layout=fs_split_v1-8         	  351249	      3141 ns/op	     536 B/op	       6 allocs/op
+BenchmarkLayout/workload=mixed/layout=fs_split_v1-8         	  390252	      3264 ns/op	     535 B/op	       5 allocs/op
+BenchmarkLayout/workload=mixed/layout=fs_split_v1-8         	  416514	      3120 ns/op	     535 B/op	       5 allocs/op
+BenchmarkLayout/workload=mixed/layout=fs_split_v1-8         	  418741	      3228 ns/op	     536 B/op	       6 allocs/op
+BenchmarkLayout/workload=mixed/layout=fs_split_v1-8         	  346836	      3069 ns/op	     535 B/op	       5 allocs/op
+PASS
+ok  	github.com/Filo6699/regiondb/internal/storage/fs_region	99.589s

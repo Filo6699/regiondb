@@ -73,6 +73,9 @@ only as a reproducible point of reference under comparable conditions.
 The [command-path optimization results](benchmarks/command-path-optimization-2026-07-30.md)
 compare the same focused benchmark before and after buffer reuse and preserve
 all samples in a raw artifact.
+The [experimental region layout comparison](benchmarks/experimental-region-layout-2026-07-30.md)
+records the measured A/B result and the decision to keep `fs_region_v1` out of
+the production default and compatibility guarantees.
 
 regiondb is specialized chunk/grid storage for games and grid-based
 simulations. These scenarios characterize only the implemented regular-chunk
