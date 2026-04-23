@@ -1,3 +1,5 @@
+//go:build regiondb_experimental
+
 package fs_region
 
 import (

@@ -24,6 +24,7 @@ for each workload and layout:
 
 ```sh
 go test -run '^$' \
+  -tags=regiondb_experimental \
   -bench '^BenchmarkLayout$' \
   -benchmem \
   -count=10 \

@@ -1,0 +1,36 @@
+name: Experimental region layout
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  experimental-region:
+    name: tests and benchmark smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+        with:
+          go-version: "1.24.x"
+          cache: true
+          cache-dependency-path: go.mod
+
+      - name: Test experimental region layout
+        run: go test -tags=regiondb_experimental -count=1 ./internal/storage/fs_region
+
+      - name: Run experimental benchmark smoke
+        run: >-
+          go test
+          -tags=regiondb_experimental
+          -run '^$'
+          -bench '^BenchmarkLayout$'
+          -benchtime=1x
+          -count=1
+          ./internal/storage/fs_region
