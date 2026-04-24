@@ -57,6 +57,26 @@ Those write results compare different persistence designs: `fs_region_v1`
 writes image slots in place and has no WAL, checkpoint, crash-recovery, or
 durability-mode contract.
 
+## Correctness validation
+
+The benchmark command validates only that the tagged benchmark completes and
+reports measurements. Correctness is checked separately by the tagged
+`TestLayoutsAgreeOnChunkOperations` test, which runs the same deterministic
+chunk read, write, overwrite, absence, and reopen observations against both
+layouts:
+
+```sh
+go test -tags=regiondb_experimental \
+  -run '^TestLayoutsAgreeOnChunkOperations$' \
+  ./internal/storage/fs_region
+```
+
+Passing that test establishes equivalence only for the exercised chunk
+operations. It does not validate crash recovery, concurrent writers, durability
+commit points, format migration, or production support. Neither the
+correctness test nor the benchmark creates a compatibility or support
+guarantee for `fs_region_v1`.
+
 ## Decision
 
 `fs_region_v1` is a no-go for the production default and for compatibility or
