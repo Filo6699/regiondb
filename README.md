@@ -75,6 +75,9 @@ performance claims or CI thresholds.
 
 The project requires Go 1.24 or later.
 
+See [Contributing](CONTRIBUTING.md) for commit, scope, experimental-feature,
+and validation policy.
+
 ```sh
 scripts/test/quick.sh
 ```
