@@ -1,7 +1,7 @@
 # regiondb text protocol version 1
 
-This document specifies the text protocol implemented by the current
-development version. There is no version negotiation on the wire.
+This document specifies the text protocol implemented by regiondb. There is no
+version negotiation on the wire.
 
 ## Transport and session
 

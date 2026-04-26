@@ -1,7 +1,6 @@
 # Concurrency model
 
-This document describes the concurrency behavior of the current development
-version.
+This document describes regiondb's concurrency behavior.
 
 ## Server ownership
 

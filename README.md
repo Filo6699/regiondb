@@ -3,9 +3,8 @@
 `regiondb` is a specialized chunk/grid storage engine for games and grid-based
 simulations.
 
-The current development version provides a packed chunk store backed by the
-`fs_split_v1` on-disk format and an authenticated text protocol over TCP or
-TLS.
+regiondb provides a packed chunk store backed by the `fs_split_v1` on-disk
+format and an authenticated text protocol over TCP or TLS.
 
 ## Running the server
 
