@@ -60,6 +60,7 @@ The current contracts are documented in:
 - [Concurrency model](docs/CONCURRENCY.md)
 - [Scenario benchmarks](docs/BENCHMARKS.md)
 - [Docker](docs/DOCKER.md)
+- [Windows guide](docs/WINDOWS.md)
 - [Release notes](docs/releases/v0.1.1-alpha.md)
 
 ## Scenario benchmarks
