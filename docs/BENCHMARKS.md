@@ -76,6 +76,9 @@ all samples in a raw artifact.
 The [experimental region layout comparison](benchmarks/experimental-region-layout-2026-07-30.md)
 records the measured A/B result and the decision to keep `fs_region_v1` out of
 the production default and compatibility guarantees.
+The [Windows-native validation snapshot](benchmarks/windows-native-evidence-2026-07-30.md)
+records functional benchmark smoke, storage concurrency, and writer-lock
+evidence from a hosted Windows run. It does not provide throughput results.
 
 regiondb is specialized chunk/grid storage for games and grid-based
 simulations. These scenarios characterize only the implemented regular-chunk

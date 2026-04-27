@@ -91,6 +91,10 @@ filesystem, architecture, or storage-driver combination. The experimental
 `fs_region_v1` layout is opt-in and is not part of the supported storage
 contract.
 
+The [Windows-native validation snapshot](benchmarks/windows-native-evidence-2026-07-30.md)
+records the environment, functional benchmark smoke, concurrency cases, and
+limitations of the published evidence.
+
 ## Troubleshooting
 
 - If startup reports that the writer is locked, stop the other regiondb

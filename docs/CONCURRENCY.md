@@ -35,8 +35,9 @@ These locks prevent in-process races and lost updates through one engine.
 One writer owns a data directory at a time. A writer creates or reuses the
 `.regiondb.lock` directory and takes a nonblocking operating-system lock on
 `.regiondb.lock/guard`. A second writer is rejected while that lock is held.
-The current writer lock is supported on Unix platforms that provide `flock`;
-other platforms fail writer startup rather than claim weaker exclusion.
+The writer guard uses `flock` on supported Unix platforms and `LockFileEx` on
+Windows. Other platforms fail writer startup rather than claim weaker
+exclusion.
 
 While it owns the guard, the writer publishes `.regiondb.lock/owner.json` with
 these fields:
