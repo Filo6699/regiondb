@@ -62,6 +62,12 @@ const (
 
 func (s *Store) RuntimeStats() storage.RuntimeStats {
 	stats := s.cache.runtimeStats()
+	if s.options.ReadOnly {
+		stats.ProcessLockMode = "none"
+	} else {
+		stats.ProcessLockMode = writerGuardMode()
+	}
+	stats.ChunkLockMode = "shared-rwmutex"
 	// fs_split writes each chunk before admitting it to the cache, so it has
 	// no dirty resident state to report.
 	stats.WALFlushes = s.walFlushCount.Load()

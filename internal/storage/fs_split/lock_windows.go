@@ -10,6 +10,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+func writerGuardMode() string {
+	return "lock-file-ex"
+}
+
 func openWriterGuard(path string) (*os.File, error) {
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {

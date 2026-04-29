@@ -66,10 +66,13 @@ distinct; the [project terminology](TERMINOLOGY.md) defines their names.
 | `QUIT` | `+OK` | Close the session after the response. |
 
 The `INFO` payload contains newline-terminated `key=value` records in this
-fixed order: `regiondb_version`, `cache_hits`, `cache_misses`, `loaded_chunks`,
-`dirty_chunks`, `evictions`, `wal_flushes`, and `checkpoints`. The version is
-`1`; counters and gauges are unsigned decimal integers. No unbounded or
-backend-defined keys are included.
+fixed order: `regiondb_version`, `process_lock_mode`, `chunk_lock_mode`,
+`cache_hits`, `cache_misses`, `loaded_chunks`, `dirty_chunks`, `evictions`,
+`wal_flushes`, and `checkpoints`. The version is `1`; counters and gauges are
+unsigned decimal integers. A writer reports `flock` or `lock-file-ex` as the
+active process lock and `shared-rwmutex` as the chunk access lock. A read-only
+store reports `none` for its process lock. No unbounded or backend-defined keys
+are included.
 
 `CHUNK` and `CHUNKBIN` return `NOT_FOUND` when their chunk file is absent.
 Storage failures are reported with the `STORAGE` code. The binary byte count

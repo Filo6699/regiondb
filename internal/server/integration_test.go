@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -33,12 +34,10 @@ func testIntegrationTCPCommandLifecycle(t *testing.T) {
 	}
 
 	reader := bufio.NewReader(connection)
-	for _, want := range []string{
-		"-ERR NOAUTH authentication required\r\n",
-		"+OK\r\n",
-		"+OK\r\n",
-		"$118\r\n",
+	infoResponse := []string{
 		"regiondb_version=1\n",
+		"process_lock_mode=" + expectedProcessLockMode() + "\n",
+		"chunk_lock_mode=shared-rwmutex\n",
 		"cache_hits=0\n",
 		"cache_misses=1\n",
 		"loaded_chunks=1\n",
@@ -46,6 +45,19 @@ func testIntegrationTCPCommandLifecycle(t *testing.T) {
 		"evictions=0\n",
 		"wal_flushes=0\n",
 		"checkpoints=0\n",
+	}
+	infoBytes := 0
+	for _, line := range infoResponse {
+		infoBytes += len(line)
+	}
+	wantResponses := []string{
+		"-ERR NOAUTH authentication required\r\n",
+		"+OK\r\n",
+		"+OK\r\n",
+		fmt.Sprintf("$%d\r\n", infoBytes),
+	}
+	wantResponses = append(wantResponses, infoResponse...)
+	wantResponses = append(wantResponses,
 		"\r\n",
 		"+OK 1\r\n",
 		"$1\r\n",
@@ -53,7 +65,8 @@ func testIntegrationTCPCommandLifecycle(t *testing.T) {
 		"$4\r\n",
 		"9000\r\n",
 		"+OK\r\n",
-	} {
+	)
+	for _, want := range wantResponses {
 		got, err := reader.ReadString('\n')
 		if err != nil {
 			t.Fatalf("read response: %v", err)
@@ -65,6 +78,13 @@ func testIntegrationTCPCommandLifecycle(t *testing.T) {
 	if _, err := reader.ReadByte(); err != io.EOF {
 		t.Fatalf("read after QUIT error = %v, want EOF", err)
 	}
+}
+
+func expectedProcessLockMode() string {
+	if runtime.GOOS == "windows" {
+		return "lock-file-ex"
+	}
+	return "flock"
 }
 
 func testIntegrationTCPConcurrentClients(t *testing.T) {

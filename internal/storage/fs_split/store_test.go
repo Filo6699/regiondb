@@ -1149,12 +1149,14 @@ func TestStoreRuntimeStats(t *testing.T) {
 	}
 
 	want := storage.RuntimeStats{
-		CacheHits:    1,
-		CacheMisses:  1,
-		LoadedChunks: 1,
-		Evictions:    1,
-		WALFlushes:   3,
-		Checkpoints:  1,
+		ProcessLockMode: writerGuardMode(),
+		ChunkLockMode:   "shared-rwmutex",
+		CacheHits:       1,
+		CacheMisses:     1,
+		LoadedChunks:    1,
+		Evictions:       1,
+		WALFlushes:      3,
+		Checkpoints:     1,
 	}
 	if got := store.RuntimeStats(); got != want {
 		t.Fatalf("RuntimeStats() = %+v, want %+v", got, want)

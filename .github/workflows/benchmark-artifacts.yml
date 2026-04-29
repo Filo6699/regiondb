@@ -85,8 +85,11 @@ jobs:
           go_version="$(go env GOVERSION)"
           go_os="$(go env GOOS)"
           go_arch="$(go env GOARCH)"
-          printf '{\n  "git_sha": "%s",\n  "go_version": "%s",\n  "os": "%s",\n  "arch": "%s",\n  "flags": "%s",\n  "seed": %s,\n  "raw_output": "raw-output.json"\n}\n' \
+          process_lock_mode="$(jq -r '.lock_modes.process_lock_mode' "$artifact_dir/raw-output.json")"
+          chunk_lock_mode="$(jq -r '.lock_modes.chunk_lock_mode' "$artifact_dir/raw-output.json")"
+          printf '{\n  "git_sha": "%s",\n  "go_version": "%s",\n  "os": "%s",\n  "arch": "%s",\n  "flags": "%s",\n  "seed": %s,\n  "process_lock_mode": "%s",\n  "chunk_lock_mode": "%s",\n  "raw_output": "raw-output.json"\n}\n' \
             "$git_sha" "$go_version" "$go_os" "$go_arch" "$flags" "$BENCHMARK_SEED" \
+            "$process_lock_mode" "$chunk_lock_mode" \
             > "$artifact_dir/manifest.json"
           (
             cd "$artifact_dir"

@@ -134,6 +134,8 @@ func (s *Session) Execute(command Command) Response {
 func infoPayload(stats storage.RuntimeStats) []byte {
 	payload := make([]byte, 0, 256)
 	payload = append(payload, "regiondb_version=1\n"...)
+	payload = appendInfoValue(payload, "process_lock_mode", stats.ProcessLockMode)
+	payload = appendInfoValue(payload, "chunk_lock_mode", stats.ChunkLockMode)
 	payload = appendInfoCounter(payload, "cache_hits", stats.CacheHits)
 	payload = appendInfoCounter(payload, "cache_misses", stats.CacheMisses)
 	payload = appendInfoCounter(payload, "loaded_chunks", stats.LoadedChunks)
@@ -141,6 +143,13 @@ func infoPayload(stats storage.RuntimeStats) []byte {
 	payload = appendInfoCounter(payload, "evictions", stats.Evictions)
 	payload = appendInfoCounter(payload, "wal_flushes", stats.WALFlushes)
 	return appendInfoCounter(payload, "checkpoints", stats.Checkpoints)
+}
+
+func appendInfoValue(payload []byte, key, value string) []byte {
+	payload = append(payload, key...)
+	payload = append(payload, '=')
+	payload = append(payload, value...)
+	return append(payload, '\n')
 }
 
 func appendInfoCounter(payload []byte, key string, value uint64) []byte {

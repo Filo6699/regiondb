@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"os"
 	"testing"
 
 	"github.com/Filo6699/regiondb/internal/geometry"
@@ -20,7 +21,8 @@ func TestRunQuickTCPBenchmark(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := fs_split.Open(t.TempDir(), g)
+	dataDir := t.TempDir()
+	store, err := fs_split.Open(dataDir, g)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,13 +39,20 @@ func TestRunQuickTCPBenchmark(t *testing.T) {
 	go func() {
 		serveResult <- server.Serve(ctx, listener, engine)
 	}()
-	t.Cleanup(func() {
+	shutdownDone := false
+	shutdown := func() {
+		shutdownDone = true
 		cancel()
 		if err := <-serveResult; err != nil {
 			t.Errorf("Serve() error = %v", err)
 		}
 		if err := store.Close(); err != nil {
 			t.Errorf("Close() error = %v", err)
+		}
+	}
+	t.Cleanup(func() {
+		if !shutdownDone {
+			shutdown()
 		}
 	})
 
@@ -72,8 +81,19 @@ func TestRunQuickTCPBenchmark(t *testing.T) {
 	if result.Address != listener.Addr().String() || result.Geometry.ChunkEdge != 2 {
 		t.Fatalf("configuration output = %+v", result)
 	}
+	if result.LockModes.Process == "" || result.LockModes.Chunk != "shared-rwmutex" {
+		t.Fatalf("lock mode output = %+v", result.LockModes)
+	}
 	if bytes.Contains(stdout.Bytes(), []byte("secret")) {
 		t.Fatalf("output contains authentication token: %q", stdout.String())
+	}
+
+	shutdown()
+	if err := os.RemoveAll(dataDir); err != nil {
+		t.Fatalf("remove benchmark data directory after shutdown: %v", err)
+	}
+	if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
+		t.Fatalf("benchmark data directory remains after cleanup: %v", err)
 	}
 }
 

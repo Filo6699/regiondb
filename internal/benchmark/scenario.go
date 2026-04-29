@@ -88,6 +88,11 @@ type Geometry struct {
 	BlockBits      uint8  `json:"block_bits"`
 }
 
+type LockModes struct {
+	Process string `json:"process_lock_mode"`
+	Chunk   string `json:"chunk_lock_mode"`
+}
+
 func GeometryFrom(config geometry.Config) Geometry {
 	return Geometry{
 		ChunkEdge:      config.ChunkEdge,

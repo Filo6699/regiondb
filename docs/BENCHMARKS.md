@@ -55,8 +55,14 @@ backend, workload, seed, measured operation and read/write counts, total
 duration, working-set size, operations per second, and latency minimum, p50,
 p95, p99, and maximum. It also records the geometry; direct results include
 durability and TCP results include the server address without the
-authentication token. Durations and latencies use nanoseconds, and percentiles
-use the nearest-rank method.
+authentication token. Both results record the active process and chunk lock
+modes. Durations and latencies use nanoseconds, and percentiles use the
+nearest-rank method.
+
+The reproducible direct benchmark bundle copies `process_lock_mode` and
+`chunk_lock_mode` from the raw result into its manifest. This makes the
+operating-system writer guard and in-process chunk access mode visible without
+inferring them from the runner name.
 
 The measured loop excludes working-set preparation. The TCP result includes
 client command encoding and one complete request/response round trip. The

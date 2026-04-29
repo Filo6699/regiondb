@@ -37,6 +37,7 @@ type config struct {
 type output struct {
 	benchmark.Result
 	Geometry   benchmark.Geometry      `json:"geometry"`
+	LockModes  benchmark.LockModes     `json:"lock_modes"`
 	Durability fs_split.DurabilityMode `json:"durability"`
 }
 
@@ -91,9 +92,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnEr
 	if err != nil {
 		return fmt.Errorf("run direct benchmark: %w", err)
 	}
+	stats := store.RuntimeStats()
 	if err := json.NewEncoder(stdout).Encode(output{
-		Result:     result,
-		Geometry:   benchmark.GeometryFrom(config.geometry),
+		Result:   result,
+		Geometry: benchmark.GeometryFrom(config.geometry),
+		LockModes: benchmark.LockModes{
+			Process: stats.ProcessLockMode,
+			Chunk:   stats.ChunkLockMode,
+		},
 		Durability: config.durability,
 	}); err != nil {
 		return fmt.Errorf("write benchmark result: %w", err)

@@ -7,6 +7,10 @@ import (
 	"os"
 )
 
+func writerGuardMode() string {
+	return "unsupported"
+}
+
 func openWriterGuard(string) (*os.File, error) {
 	return nil, errors.New("exclusive data-directory locking is unsupported on this platform")
 }

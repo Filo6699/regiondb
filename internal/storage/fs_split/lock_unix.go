@@ -9,6 +9,10 @@ import (
 	"syscall"
 )
 
+func writerGuardMode() string {
+	return "flock"
+}
+
 func openWriterGuard(path string) (*os.File, error) {
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {

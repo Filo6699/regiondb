@@ -43,8 +43,9 @@ type config struct {
 
 type output struct {
 	benchmark.Result
-	Address  string             `json:"address"`
-	Geometry benchmark.Geometry `json:"geometry"`
+	Address   string              `json:"address"`
+	Geometry  benchmark.Geometry  `json:"geometry"`
+	LockModes benchmark.LockModes `json:"lock_modes"`
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -63,6 +64,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	defer func() {
 		_ = client.close()
 	}()
+	lockModes, err := client.lockModes(ctx)
+	if err != nil {
+		return fmt.Errorf("read server lock modes: %w", err)
+	}
 
 	coordinates, err := benchmark.WorkingSet(config.scenario)
 	if err != nil {
@@ -90,9 +95,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("run TCP benchmark: %w", err)
 	}
 	if err := json.NewEncoder(stdout).Encode(output{
-		Result:   result,
-		Address:  config.address,
-		Geometry: benchmark.GeometryFrom(config.geometry),
+		Result:    result,
+		Address:   config.address,
+		Geometry:  benchmark.GeometryFrom(config.geometry),
+		LockModes: lockModes,
 	}); err != nil {
 		return fmt.Errorf("write benchmark result: %w", err)
 	}
@@ -184,7 +190,11 @@ func (c *client) close() error {
 func (c *client) readChunk(ctx context.Context, coord geometry.Coord) error {
 	command := "CHUNKBIN " + strconv.FormatInt(coord.X, 10) + " " +
 		strconv.FormatInt(coord.Y, 10) + "\r\n"
-	return c.bulk(ctx, command)
+	payload, err := c.bulk(ctx, command, c.payloadBytes)
+	if err == nil && len(payload) != c.payloadBytes {
+		return fmt.Errorf("unexpected chunk payload length %d", len(payload))
+	}
+	return err
 }
 
 func (c *client) writeChunk(ctx context.Context, coord geometry.Coord, value byte) error {
@@ -204,26 +214,50 @@ func (c *client) simple(ctx context.Context, command string) error {
 	return nil
 }
 
-func (c *client) bulk(ctx context.Context, command string) error {
+func (c *client) bulk(ctx context.Context, command string, maximumLength int) ([]byte, error) {
 	line, err := c.request(ctx, command)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(line) < 4 || line[0] != '$' || !strings.HasSuffix(line, "\r\n") {
-		return fmt.Errorf("unexpected response %q", strings.TrimSuffix(line, "\r\n"))
+		return nil, fmt.Errorf("unexpected response %q", strings.TrimSuffix(line, "\r\n"))
 	}
 	length, err := strconv.Atoi(line[1 : len(line)-2])
-	if err != nil || length != c.payloadBytes {
-		return fmt.Errorf("unexpected bulk length %q", line[1:len(line)-2])
+	if err != nil || length < 0 || length > maximumLength {
+		return nil, fmt.Errorf("unexpected bulk length %q", line[1:len(line)-2])
 	}
 	payload := make([]byte, length+2)
 	if _, err := io.ReadFull(c.reader, payload); err != nil {
-		return fmt.Errorf("read bulk payload: %w", err)
+		return nil, fmt.Errorf("read bulk payload: %w", err)
 	}
 	if payload[length] != '\r' || payload[length+1] != '\n' {
-		return errors.New("bulk payload is missing CRLF")
+		return nil, errors.New("bulk payload is missing CRLF")
 	}
-	return nil
+	return payload[:length], nil
+}
+
+func (c *client) lockModes(ctx context.Context) (benchmark.LockModes, error) {
+	payload, err := c.bulk(ctx, "INFO\r\n", 512)
+	if err != nil {
+		return benchmark.LockModes{}, err
+	}
+	var modes benchmark.LockModes
+	for _, line := range strings.Split(string(payload), "\n") {
+		key, value, found := strings.Cut(line, "=")
+		if !found {
+			continue
+		}
+		switch key {
+		case "process_lock_mode":
+			modes.Process = value
+		case "chunk_lock_mode":
+			modes.Chunk = value
+		}
+	}
+	if modes.Process == "" || modes.Chunk == "" {
+		return benchmark.LockModes{}, errors.New("INFO response is missing lock modes")
+	}
+	return modes, nil
 }
 
 func (c *client) request(ctx context.Context, command string) (string, error) {

@@ -35,6 +35,9 @@ func TestRunQuickDirectBenchmark(t *testing.T) {
 	if result.Geometry.ChunkEdge != 2 || result.Durability != "relaxed" {
 		t.Fatalf("configuration output = %+v", result)
 	}
+	if result.LockModes.Process == "" || result.LockModes.Chunk != "shared-rwmutex" {
+		t.Fatalf("lock mode output = %+v", result.LockModes)
+	}
 }
 
 func TestParseConfigRejectsUnknownWorkload(t *testing.T) {
