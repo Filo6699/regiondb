@@ -94,6 +94,9 @@ contract.
 The [Windows-native validation snapshot](benchmarks/windows-native-evidence-2026-07-30.md)
 records the environment, functional benchmark smoke, concurrency cases, and
 limitations of the published evidence.
+The [post-fix cleanup snapshot](benchmarks/windows-post-fix-snapshot-2026-07-30.md)
+records benchmark teardown ordering and the active process/chunk lock metadata
+without treating a cross-compile as Windows runtime evidence.
 
 ## Troubleshooting
 

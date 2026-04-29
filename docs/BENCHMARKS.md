@@ -85,6 +85,9 @@ the production default and compatibility guarantees.
 The [Windows-native validation snapshot](benchmarks/windows-native-evidence-2026-07-30.md)
 records functional benchmark smoke, storage concurrency, and writer-lock
 evidence from a hosted Windows run. It does not provide throughput results.
+The [post-fix Windows cleanup snapshot](benchmarks/windows-post-fix-snapshot-2026-07-30.md)
+records the lock-mode metadata contract, deterministic benchmark teardown
+regression, and its explicit native-execution evidence boundary.
 
 regiondb is specialized chunk/grid storage for games and grid-based
 simulations. These scenarios characterize only the implemented regular-chunk
