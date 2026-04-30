@@ -1,0 +1,41 @@
+name: Feature request
+description: Propose a focused improvement to regiondb
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: Describe the problem and the workload that needs the change.
+    validations:
+      required: true
+  - type: textarea
+    id: requested-outcome
+    attributes:
+      label: Requested outcome
+      description: Describe the behavior you want without prescribing an implementation.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Version and operating system
+      description: Provide the current regiondb version and OS when they affect the request.
+      placeholder: v0.1.1-alpha on Linux amd64, or not applicable
+    validations:
+      required: true
+  - type: input
+    id: benchmark-artifact
+    attributes:
+      label: Benchmark artifact
+      description: For performance requests, link a reproducible artifact; otherwise write "not applicable".
+      placeholder: https://github.com/.../actions/runs/... or not applicable
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: List workarounds or alternatives you considered.

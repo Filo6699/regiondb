@@ -1,0 +1,48 @@
+name: Bug report
+description: Report reproducible incorrect behavior in regiondb
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Provide a release version or commit SHA.
+      placeholder: v0.1.1-alpha or c7ce194
+    validations:
+      required: true
+  - type: input
+    id: operating-system
+    attributes:
+      label: Operating system
+      description: Include the OS version and architecture.
+      placeholder: Windows 11 24H2, amd64
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: List the smallest commands, configuration, and steps that reproduce the problem.
+      placeholder: |
+        1. Start regiondb with ...
+        2. Run ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected-and-actual
+    attributes:
+      label: Expected and actual behavior
+      description: Explain what you expected and what happened instead. Include relevant logs without secrets.
+    validations:
+      required: true
+  - type: input
+    id: benchmark-artifact
+    attributes:
+      label: Benchmark artifact
+      description: Link the benchmark artifact or write "not applicable".
+      placeholder: https://github.com/.../actions/runs/... or not applicable
+    validations:
+      required: true
