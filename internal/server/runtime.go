@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"runtime"
 	"sync"
 
+	"github.com/Filo6699/regiondb/internal/logging"
 	"github.com/Filo6699/regiondb/internal/protocol"
 )
 
@@ -23,6 +25,7 @@ type Options struct {
 	Workers      int
 	AcceptQueue  int
 	MaxLineBytes int
+	Logger       *logging.Logger
 }
 
 func DefaultOptions() Options {
@@ -71,6 +74,13 @@ func ServeWithOptions(
 
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	if options.Logger != nil {
+		options.Logger.Info("server", "serve_started",
+			slog.Int("workers", options.Workers),
+			slog.Int("accept_queue", options.AcceptQueue),
+		)
+		defer options.Logger.Info("server", "serve_stopped")
+	}
 	var connections sync.Map
 	var shutdownOnce sync.Once
 	var workers sync.WaitGroup
@@ -133,10 +143,16 @@ func ServeWithOptions(
 			}
 			cancel()
 			waitForWorkers()
+			if options.Logger != nil {
+				options.Logger.Error("server", "accept_failed")
+			}
 			return fmt.Errorf("accept connection: %w", err)
 		}
 
 		connections.Store(connection, struct{}{})
+		if options.Logger != nil {
+			options.Logger.Info("server", "connection_accepted")
+		}
 		if serveCtx.Err() != nil {
 			_ = connection.Close()
 			connections.Delete(connection)

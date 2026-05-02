@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/Filo6699/regiondb/internal/geometry"
+	"github.com/Filo6699/regiondb/internal/logging"
 	"github.com/Filo6699/regiondb/internal/protocol"
 	"github.com/Filo6699/regiondb/internal/server"
 	"github.com/Filo6699/regiondb/internal/storage/fs_split"
@@ -25,7 +27,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, err)
+		logging.New(os.Stderr).Error("process", "exit_failed")
 		os.Exit(1)
 	}
 }
@@ -56,14 +58,18 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnEr
 	if config.version {
 		return printVersion(stdout)
 	}
+	logger := logging.New(stderr)
+	logger.Info("process", "starting", slog.String("version", version))
 
 	tlsConfig, err := loadTLSConfig(config)
 	if err != nil {
+		logger.Error("tls", "configuration_failed")
 		return err
 	}
 
 	g, err := geometry.New(config.geometry)
 	if err != nil {
+		logger.Error("geometry", "configuration_failed")
 		return fmt.Errorf("configure geometry: %w", err)
 	}
 	store, err := fs_split.OpenWithOptions(config.dataDir, g, fs_split.Options{
@@ -74,29 +80,50 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnEr
 		WALGroupCommitUpdates: config.walGroupCommitUpdates,
 	})
 	if err != nil {
+		logger.Error("storage", "open_failed")
 		return fmt.Errorf("open chunk store: %w", err)
 	}
+	logger.Info("storage", "opened",
+		slog.String("durability", string(config.durability)),
+		slog.Int("max_loaded_chunks", config.maxLoadedChunks),
+	)
 	defer func() {
-		if err := store.Close(); err != nil && returnErr == nil {
-			returnErr = fmt.Errorf("close chunk store: %w", err)
+		if err := store.Close(); err != nil {
+			logger.Error("storage", "close_failed")
+			if returnErr == nil {
+				returnErr = fmt.Errorf("close chunk store: %w", err)
+			}
+			return
 		}
+		logger.Info("storage", "closed")
 	}()
 	engine, err := protocol.NewEngine(g, store, config.token)
 	if err != nil {
+		logger.Error("protocol", "engine_initialization_failed")
 		return err
 	}
 	listener, err := listen(config.listenAddress, tlsConfig)
 	if err != nil {
+		logger.Error("server", "listen_failed")
 		return fmt.Errorf("listen on %q: %w", config.listenAddress, err)
 	}
+	logger.Info("server", "listening",
+		slog.String("address", listener.Addr().String()),
+		slog.Bool("tls", tlsConfig != nil),
+	)
 	defer func() {
 		_ = listener.Close()
 	}()
-	return server.ServeWithOptions(ctx, listener, engine, server.Options{
+	err = server.ServeWithOptions(ctx, listener, engine, server.Options{
 		Workers:      config.workers,
 		AcceptQueue:  config.acceptQueue,
 		MaxLineBytes: config.maxLineBytes,
+		Logger:       logger,
 	})
+	if err != nil {
+		logger.Error("server", "serve_failed")
+	}
+	return err
 }
 
 func loadTLSConfig(config config) (*tls.Config, error) {
