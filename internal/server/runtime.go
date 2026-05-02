@@ -150,9 +150,6 @@ func ServeWithOptions(
 		}
 
 		connections.Store(connection, struct{}{})
-		if options.Logger != nil {
-			options.Logger.Info("server", "connection_accepted")
-		}
 		if serveCtx.Err() != nil {
 			_ = connection.Close()
 			connections.Delete(connection)

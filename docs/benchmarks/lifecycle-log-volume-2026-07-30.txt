@@ -1,0 +1,32 @@
+regiondb lifecycle log volume comparison
+measurement_date=2026-07-30
+os=Arch Linux, Linux 6.18.9-arch1-2
+go=go1.24.13 linux/amd64
+workload=readiness probe plus 100 authenticated PING connections
+
+before_commit=72ddf4c
+info=107
+warn=0
+error=0
+total=107
+events:
+  closed=1
+  connection_accepted=101
+  listening=1
+  opened=1
+  serve_started=1
+  serve_stopped=1
+  starting=1
+
+after_tree=connection info event removed
+info=6
+warn=0
+error=0
+total=6
+events:
+  closed=1
+  listening=1
+  opened=1
+  serve_started=1
+  serve_stopped=1
+  starting=1
