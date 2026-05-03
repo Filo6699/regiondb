@@ -62,6 +62,10 @@ jobs:
           REGIONDB_TEST_JSON_OUTPUT: ${{ runner.os == 'Windows' && 'windows-test-results.json' || '' }}
         run: scripts/test/quick.sh
 
+      - name: Repeat server integration tests
+        if: runner.os == 'Linux'
+        run: go test -run Integration -count=20 ./internal/server
+
       - name: Annotate Windows test failures
         if: failure() && runner.os == 'Windows'
         shell: pwsh
