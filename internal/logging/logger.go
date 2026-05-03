@@ -6,7 +6,14 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 )
+
+type Sink interface {
+	slog.Handler
+}
+
+type Clock func() time.Time
 
 type Logger struct {
 	logger *slog.Logger
@@ -14,7 +21,21 @@ type Logger struct {
 }
 
 func New(writer io.Writer) *Logger {
-	handler := slog.NewTextHandler(writer, &slog.HandlerOptions{
+	return NewWithSink(newTextSink(writer), time.Now)
+}
+
+func NewWithSink(sink Sink, clock Clock) *Logger {
+	return &Logger{
+		logger: slog.New(clockSink{
+			sink:  sink,
+			clock: clock,
+		}),
+		pid: os.Getpid(),
+	}
+}
+
+func newTextSink(writer io.Writer) Sink {
+	return slog.NewTextHandler(writer, &slog.HandlerOptions{
 		ReplaceAttr: func(_ []string, attribute slog.Attr) slog.Attr {
 			switch attribute.Key {
 			case slog.TimeKey:
@@ -28,10 +49,6 @@ func New(writer io.Writer) *Logger {
 			return attribute
 		},
 	})
-	return &Logger{
-		logger: slog.New(handler),
-		pid:    os.Getpid(),
-	}
 }
 
 func (l *Logger) Info(component, event string, attributes ...slog.Attr) {
@@ -69,4 +86,32 @@ func sensitiveKey(key string) bool {
 		strings.HasSuffix(key, "_path") ||
 		key == "dir" ||
 		strings.HasSuffix(key, "_dir")
+}
+
+type clockSink struct {
+	sink  Sink
+	clock Clock
+}
+
+func (s clockSink) Enabled(ctx context.Context, level slog.Level) bool {
+	return s.sink.Enabled(ctx, level)
+}
+
+func (s clockSink) Handle(ctx context.Context, record slog.Record) error {
+	record.Time = s.clock()
+	return s.sink.Handle(ctx, record)
+}
+
+func (s clockSink) WithAttrs(attributes []slog.Attr) slog.Handler {
+	return clockSink{
+		sink:  s.sink.WithAttrs(attributes),
+		clock: s.clock,
+	}
+}
+
+func (s clockSink) WithGroup(name string) slog.Handler {
+	return clockSink{
+		sink:  s.sink.WithGroup(name),
+		clock: s.clock,
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"log/slog"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Filo6699/regiondb/internal/geometry"
+	"github.com/Filo6699/regiondb/internal/logging"
 	"github.com/Filo6699/regiondb/internal/protocol"
 	"github.com/Filo6699/regiondb/internal/storage/fs_split"
 )
@@ -245,6 +247,48 @@ func TestServeCancellationClosesIdleConnections(t *testing.T) {
 	}
 }
 
+func TestServeLifecycleLogging(t *testing.T) {
+	t.Parallel()
+
+	engine := newTestEngine(t)
+	listener := newCountingListener()
+	sink := newRecordingSink()
+	logger := logging.NewWithSink(sink, func() time.Time {
+		return time.Date(2026, time.May, 3, 6, 11, 12, 0, time.UTC)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	serveResult := make(chan error, 1)
+	go func() {
+		serveResult <- ServeWithOptions(ctx, listener, engine, Options{
+			Workers:      1,
+			AcceptQueue:  1,
+			MaxLineBytes: 64,
+			Logger:       logger,
+		})
+	}()
+
+	started := sink.next(t)
+	if got, want := started.Message, "serve_started"; got != want {
+		cancel()
+		t.Fatalf("start event = %q, want %q", got, want)
+	}
+	if got, want := started.Time, time.Date(2026, time.May, 3, 6, 11, 12, 0, time.UTC); !got.Equal(want) {
+		cancel()
+		t.Fatalf("start timestamp = %v, want %v", got, want)
+	}
+	cancel()
+	if err := <-serveResult; err != nil {
+		t.Fatalf("ServeWithOptions() error = %v", err)
+	}
+	stopped := sink.next(t)
+	if got, want := stopped.Message, "serve_stopped"; got != want {
+		t.Fatalf("stop event = %q, want %q", got, want)
+	}
+	if extra := sink.records(); len(extra) != 0 {
+		t.Fatalf("unexpected lifecycle events: %+v", extra)
+	}
+}
+
 func TestServeOptionsValidation(t *testing.T) {
 	t.Parallel()
 
@@ -362,4 +406,55 @@ func (r *repeatingReader) Read(destination []byte) (int, error) {
 		}
 	}
 	return len(destination), nil
+}
+
+type recordingSink struct {
+	events chan slog.Record
+}
+
+func newRecordingSink() *recordingSink {
+	return &recordingSink{
+		events: make(chan slog.Record, 8),
+	}
+}
+
+func (s *recordingSink) Enabled(context.Context, slog.Level) bool {
+	return true
+}
+
+func (s *recordingSink) Handle(_ context.Context, record slog.Record) error {
+	s.events <- record.Clone()
+	return nil
+}
+
+func (s *recordingSink) WithAttrs([]slog.Attr) slog.Handler {
+	return s
+}
+
+func (s *recordingSink) WithGroup(string) slog.Handler {
+	return s
+}
+
+func (s *recordingSink) next(t *testing.T) slog.Record {
+	t.Helper()
+
+	select {
+	case record := <-s.events:
+		return record
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for lifecycle log")
+		return slog.Record{}
+	}
+}
+
+func (s *recordingSink) records() []slog.Record {
+	var records []slog.Record
+	for {
+		select {
+		case record := <-s.events:
+			records = append(records, record)
+		default:
+			return records
+		}
+	}
 }

@@ -3,17 +3,22 @@ package logging
 import (
 	"bytes"
 	"log/slog"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoggerFormatsStructuredLevels(t *testing.T) {
 	t.Parallel()
 
 	var output bytes.Buffer
-	logger := New(&output)
+	logger := NewWithSink(
+		newTextSink(&output),
+		func() time.Time {
+			return time.Date(2026, time.May, 3, 11, 11, 12, 0, time.FixedZone("test", 5*60*60))
+		},
+	)
 	logger.Info("server", "started", slog.String("address", "loopback listener"))
 	logger.Warn("server", "draining")
 	logger.Error("storage", "close_failed")
@@ -23,15 +28,16 @@ func TestLoggerFormatsStructuredLevels(t *testing.T) {
 		t.Fatalf("log line count = %d, want 3: %q", len(lines), output.String())
 	}
 	pid := strconv.Itoa(logger.pid)
-	for index, level := range []string{"info", "warn", "error"} {
-		pattern := `^timestamp=\S+Z level=` + level +
-			` event=\S+ component=\S+ pid=` + pid
-		if matched := regexp.MustCompile(pattern).MatchString(lines[index]); !matched {
-			t.Errorf("line %d = %q, want pattern %q", index, lines[index], pattern)
-		}
+	want := []string{
+		`timestamp=2026-05-03T06:11:12.000Z level=info event=started component=server pid=` +
+			pid + ` address="loopback listener"`,
+		"timestamp=2026-05-03T06:11:12.000Z level=warn event=draining component=server pid=" + pid,
+		"timestamp=2026-05-03T06:11:12.000Z level=error event=close_failed component=storage pid=" + pid,
 	}
-	if !strings.Contains(lines[0], `address="loopback listener"`) {
-		t.Fatalf("escaped field missing from %q", lines[0])
+	for index := range want {
+		if lines[index] != want[index] {
+			t.Errorf("line %d = %q, want %q", index, lines[index], want[index])
+		}
 	}
 }
 
