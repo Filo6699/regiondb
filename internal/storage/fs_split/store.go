@@ -46,6 +46,7 @@ type Store struct {
 	checkpointCount      atomic.Uint64
 	closed               bool
 	atomicWriteFailpoint func(atomicWriteBoundary) error
+	walFailpoint         func(walBoundary) error
 	mu                   sync.RWMutex
 }
 

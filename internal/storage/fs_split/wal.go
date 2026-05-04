@@ -19,6 +19,15 @@ const (
 
 var ErrCorruptWAL = errors.New("corrupt fs_split_v1 WAL")
 
+type walBoundary string
+
+const (
+	walRecordAppended      walBoundary = "record-appended"
+	walRecordSynced        walBoundary = "record-synced"
+	walCheckpointTruncated walBoundary = "checkpoint-truncated"
+	walCheckpointSynced    walBoundary = "checkpoint-synced"
+)
+
 type walRecord struct {
 	coord   geometry.Coord
 	payload []byte
@@ -30,6 +39,9 @@ func (s *Store) appendWAL(record []byte) error {
 	}
 	if _, err := s.wal.Write(record); err != nil {
 		return fmt.Errorf("append WAL: %w", err)
+	}
+	if err := s.runWALFailpoint(walRecordAppended); err != nil {
+		return err
 	}
 	if s.options.Durability == DurabilityFsyncWAL {
 		s.walUnsyncedUpdates++
@@ -48,6 +60,9 @@ func (s *Store) appendWAL(record []byte) error {
 func (s *Store) syncWAL() error {
 	if err := s.wal.Sync(); err != nil {
 		return fmt.Errorf("sync WAL: %w", err)
+	}
+	if err := s.runWALFailpoint(walRecordSynced); err != nil {
+		return err
 	}
 	s.walFlushCount.Add(1)
 	s.walUnsyncedUpdates = 0
@@ -212,6 +227,9 @@ func (s *Store) clearWAL(syncData bool) error {
 	if err := s.wal.Truncate(0); err != nil {
 		return fmt.Errorf("truncate WAL: %w", err)
 	}
+	if err := s.runWALFailpoint(walCheckpointTruncated); err != nil {
+		return err
+	}
 	if _, err := s.wal.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("rewind WAL: %w", err)
 	}
@@ -219,8 +237,21 @@ func (s *Store) clearWAL(syncData bool) error {
 		if err := s.wal.Sync(); err != nil {
 			return fmt.Errorf("sync truncated WAL: %w", err)
 		}
+		if err := s.runWALFailpoint(walCheckpointSynced); err != nil {
+			return err
+		}
 		s.walFlushCount.Add(1)
 	}
 	s.walUnsyncedUpdates = 0
+	return nil
+}
+
+func (s *Store) runWALFailpoint(boundary walBoundary) error {
+	if s.walFailpoint == nil {
+		return nil
+	}
+	if err := s.walFailpoint(boundary); err != nil {
+		return fmt.Errorf("WAL failpoint %q: %w", boundary, err)
+	}
 	return nil
 }
