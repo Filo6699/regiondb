@@ -1,0 +1,60 @@
+version: 2
+
+project_name: regiondb
+
+before:
+  hooks:
+    - go mod tidy
+    - scripts/test/full.sh
+
+builds:
+  - id: regiondb
+    main: ./cmd/regiondb
+    binary: regiondb
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - ids:
+      - regiondb
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - CHANGELOG.md
+      - LICENSE
+      - docs/PROTOCOL.md
+      - docs/STORAGE_FORMAT.md
+      - docs/CONCURRENCY.md
+      - docs/WINDOWS.md
+
+sboms:
+  - id: archives
+    artifacts: archive
+
+checksum:
+  name_template: SHA256SUMS
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  disable: true

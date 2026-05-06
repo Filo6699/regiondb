@@ -21,7 +21,7 @@ import (
 	"github.com/Filo6699/regiondb/internal/storage/fs_split"
 )
 
-const version = "dev"
+var version = "dev"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -11,5 +11,6 @@ scripts/github/configure-repository.sh
 security/signing-key.asc
 .tools/
 bin/
+dist/
 coverage.out
 *.test
