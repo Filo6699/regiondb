@@ -142,7 +142,7 @@ func openStore(
 		return nil, fmt.Errorf("reclaim stale chunk temporary files: %w", err)
 	}
 
-	wal, err := os.OpenFile(filepath.Join(absoluteRoot, walName), os.O_RDWR|os.O_CREATE, 0o600)
+	wal, err := openWAL(absoluteRoot, nil)
 	if err != nil {
 		return nil, fmt.Errorf("open WAL: %w", err)
 	}
@@ -166,6 +166,28 @@ func openStore(
 		return nil, err
 	}
 	return store, nil
+}
+
+func openWAL(
+	root string,
+	failpoint func(atomicWriteBoundary) error,
+) (*os.File, error) {
+	path := filepath.Join(root, walName)
+	wal, err := os.OpenFile(path, os.O_RDWR, 0o600)
+	if err == nil {
+		return wal, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+
+	// A synced WAL record is not recoverable after a crash if the WAL's first
+	// directory entry was never committed. Use the same durable create boundary
+	// as synchronized chunk replacement before opening the append handle.
+	if err := writeAtomic(path, nil, true, failpoint); err != nil {
+		return nil, fmt.Errorf("create durable WAL: %w", err)
+	}
+	return os.OpenFile(path, os.O_RDWR, 0o600)
 }
 
 func (s *Store) Close() error {
