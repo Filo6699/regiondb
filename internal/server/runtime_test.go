@@ -17,7 +17,7 @@ import (
 	"github.com/Filo6699/regiondb/internal/storage/fs_split"
 )
 
-func TestServeLoopback(t *testing.T) {
+func TestServePipelinedCommands(t *testing.T) {
 	t.Parallel()
 
 	g, err := geometry.New(geometry.Config{ChunkEdge: 2, LargeChunkEdge: 2, BlockBits: 4})
@@ -92,6 +92,56 @@ func TestServeLoopback(t *testing.T) {
 	if err := <-serveResult; err != nil {
 		t.Fatalf("Serve() error = %v", err)
 	}
+}
+
+func TestServePreservesPartialLinesAndMalformedBoundaries(t *testing.T) {
+	t.Parallel()
+
+	engine := newTestEngine(t)
+	serverConnection, clientConnection := net.Pipe()
+	t.Cleanup(func() {
+		_ = clientConnection.Close()
+	})
+
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		serveConnection(serverConnection, engine, 64)
+		_ = serverConnection.Close()
+	}()
+
+	writeResult := make(chan error, 1)
+	go func() {
+		if _, err := io.WriteString(clientConnection, "AUTH sec"); err != nil {
+			writeResult <- err
+			return
+		}
+		_, err := io.WriteString(clientConnection, "ret\r\nPING\nPING\r\nQUIT\r\n")
+		writeResult <- err
+	}()
+
+	reader := bufio.NewReader(clientConnection)
+	for _, want := range []string{
+		"+OK\r\n",
+		"-ERR FRAME invalid command frame: command must end with CRLF\r\n",
+		"+OK PONG\r\n",
+		"+OK\r\n",
+	} {
+		got, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("response = %q, want %q", got, want)
+		}
+	}
+	if err := <-writeResult; err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	if _, err := reader.ReadByte(); err != io.EOF {
+		t.Fatalf("read after QUIT error = %v, want EOF", err)
+	}
+	<-serveDone
 }
 
 func TestServeRejectsOversizedLineAndContinues(t *testing.T) {
