@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -170,13 +171,14 @@ func ServeWithOptions(
 }
 
 func serveConnection(connection net.Conn, engine *protocol.Engine, maxLineBytes int) {
-	reader := bufio.NewReaderSize(connection, maxLineBytes+1)
+	if err := setNoDelay(connection); err != nil {
+		return
+	}
+	reader := newLineBuffer(maxLineBytes)
 	writer := bufio.NewWriter(connection)
 	session := engine.NewSession()
-	var frameBuffer []byte
 	for {
-		frame, tooLong, err := readFrame(reader, maxLineBytes, frameBuffer[:0])
-		frameBuffer = frame
+		frame, tooLong, err := reader.readFrame(connection)
 		if tooLong {
 			if writeErr := writeResponse(writer, []byte("-ERR FRAME command exceeds max_line_bytes\r\n")); writeErr != nil {
 				return
@@ -204,20 +206,110 @@ func serveConnection(connection net.Conn, engine *protocol.Engine, maxLineBytes 
 	}
 }
 
-func readFrame(reader *bufio.Reader, maxLineBytes int, frame []byte) ([]byte, bool, error) {
+func setNoDelay(connection net.Conn) error {
 	for {
-		fragment, err := reader.ReadSlice('\n')
-		if len(frame) > maxLineBytes-len(fragment) {
-			for errors.Is(err, bufio.ErrBufferFull) {
-				_, err = reader.ReadSlice('\n')
-			}
-			return frame[:0], true, err
+		if tcpConnection, ok := connection.(*net.TCPConn); ok {
+			return tcpConnection.SetNoDelay(true)
 		}
-		frame = append(frame, fragment...)
-		if !errors.Is(err, bufio.ErrBufferFull) {
-			return frame, false, err
+		wrapped, ok := connection.(interface {
+			NetConn() net.Conn
+		})
+		if !ok {
+			return nil
+		}
+		connection = wrapped.NetConn()
+	}
+}
+
+type lineBuffer struct {
+	data       []byte
+	start      int
+	end        int
+	pendingErr error
+}
+
+func newLineBuffer(maxLineBytes int) *lineBuffer {
+	return &lineBuffer{
+		data: make([]byte, maxLineBytes+1),
+	}
+}
+
+func (b *lineBuffer) readFrame(reader io.Reader) ([]byte, bool, error) {
+	for {
+		buffered := b.data[b.start:b.end]
+		if newline := bytes.IndexByte(buffered, '\n'); newline >= 0 {
+			frameEnd := b.start + newline + 1
+			frame := b.data[b.start:frameEnd]
+			tooLong := len(frame) > b.maxLineBytes()
+			b.consume(frameEnd)
+			if tooLong {
+				return nil, true, nil
+			}
+			return frame, false, nil
+		}
+		if b.pendingErr != nil {
+			err := b.pendingErr
+			b.pendingErr = nil
+			frame := buffered
+			tooLong := len(frame) > b.maxLineBytes()
+			b.consume(b.end)
+			return frame, tooLong, err
+		}
+		if len(buffered) > b.maxLineBytes() {
+			return b.discardOversized(reader)
+		}
+
+		b.compact()
+		read, err := reader.Read(b.data[b.end:])
+		b.end += read
+		if err != nil {
+			b.pendingErr = err
+		}
+		if read == 0 && err == nil {
+			return nil, false, io.ErrNoProgress
 		}
 	}
+}
+
+func (b *lineBuffer) discardOversized(reader io.Reader) ([]byte, bool, error) {
+	b.start = 0
+	b.end = 0
+	for {
+		read, err := reader.Read(b.data)
+		if newline := bytes.IndexByte(b.data[:read], '\n'); newline >= 0 {
+			b.start = newline + 1
+			b.end = read
+			b.pendingErr = err
+			return nil, true, nil
+		}
+		if err != nil {
+			return nil, true, err
+		}
+		if read == 0 {
+			return nil, true, io.ErrNoProgress
+		}
+	}
+}
+
+func (b *lineBuffer) compact() {
+	if b.start == 0 {
+		return
+	}
+	copy(b.data, b.data[b.start:b.end])
+	b.end -= b.start
+	b.start = 0
+}
+
+func (b *lineBuffer) consume(end int) {
+	b.start = end
+	if b.start == b.end {
+		b.start = 0
+		b.end = 0
+	}
+}
+
+func (b *lineBuffer) maxLineBytes() int {
+	return len(b.data) - 1
 }
 
 func writeResponse(writer *bufio.Writer, data []byte) error {

@@ -358,16 +358,14 @@ func TestServeOptionsValidation(t *testing.T) {
 
 func BenchmarkReadFrameReuse(b *testing.B) {
 	const frame = "SET -12 34 7\r\n"
-	reader := bufio.NewReaderSize(&repeatingReader{data: []byte(frame)}, 64)
-	buffer := make([]byte, 0, len(frame))
+	reader := &repeatingReader{data: []byte(frame)}
+	buffer := newLineBuffer(64)
 
 	b.ReportAllocs()
 	for range b.N {
-		var tooLong bool
-		var err error
-		buffer, tooLong, err = readFrame(reader, len(frame), buffer[:0])
-		if err != nil || tooLong || len(buffer) != len(frame) {
-			b.Fatalf("readFrame() = (%q, %t, %v)", buffer, tooLong, err)
+		got, tooLong, err := buffer.readFrame(reader)
+		if err != nil || tooLong || string(got) != frame {
+			b.Fatalf("readFrame() = (%q, %t, %v)", got, tooLong, err)
 		}
 	}
 }
