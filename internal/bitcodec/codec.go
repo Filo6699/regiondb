@@ -58,6 +58,10 @@ func (c Codec) Get(data []byte, index uint64) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if c.width%8 == 0 {
+		offset := int(start / 8)
+		return c.getBytes(data[offset : offset+int(c.width)/8]), nil
+	}
 
 	var value uint64
 	for fieldBit := uint64(0); fieldBit < uint64(c.width); fieldBit++ {
@@ -85,6 +89,11 @@ func (c Codec) Set(data []byte, index, value uint64) error {
 	if err != nil {
 		return err
 	}
+	if c.width%8 == 0 {
+		offset := int(start / 8)
+		c.setBytes(data[offset:offset+int(c.width)/8], value)
+		return nil
+	}
 
 	for fieldBit := uint64(0); fieldBit < uint64(c.width); fieldBit++ {
 		streamBit := start + fieldBit
@@ -103,6 +112,80 @@ func (c Codec) Set(data []byte, index, value uint64) error {
 		}
 	}
 	return nil
+}
+
+func (c Codec) getBytes(field []byte) uint64 {
+	if c.order == LSBFirst {
+		switch len(field) {
+		case 1:
+			return uint64(field[0])
+		case 2:
+			return uint64(binary.LittleEndian.Uint16(field))
+		case 4:
+			return uint64(binary.LittleEndian.Uint32(field))
+		case 8:
+			return binary.LittleEndian.Uint64(field)
+		default:
+			var value uint64
+			for index, current := range field {
+				value |= uint64(current) << (uint(index) * 8)
+			}
+			return value
+		}
+	}
+
+	switch len(field) {
+	case 1:
+		return uint64(field[0])
+	case 2:
+		return uint64(binary.BigEndian.Uint16(field))
+	case 4:
+		return uint64(binary.BigEndian.Uint32(field))
+	case 8:
+		return binary.BigEndian.Uint64(field)
+	default:
+		var value uint64
+		for _, current := range field {
+			value = value<<8 | uint64(current)
+		}
+		return value
+	}
+}
+
+func (c Codec) setBytes(field []byte, value uint64) {
+	if c.order == LSBFirst {
+		switch len(field) {
+		case 1:
+			field[0] = byte(value)
+		case 2:
+			binary.LittleEndian.PutUint16(field, uint16(value))
+		case 4:
+			binary.LittleEndian.PutUint32(field, uint32(value))
+		case 8:
+			binary.LittleEndian.PutUint64(field, value)
+		default:
+			for index := range field {
+				field[index] = byte(value >> (uint(index) * 8))
+			}
+		}
+		return
+	}
+
+	switch len(field) {
+	case 1:
+		field[0] = byte(value)
+	case 2:
+		binary.BigEndian.PutUint16(field, uint16(value))
+	case 4:
+		binary.BigEndian.PutUint32(field, uint32(value))
+	case 8:
+		binary.BigEndian.PutUint64(field, value)
+	default:
+		for index := range field {
+			shift := uint(len(field)-1-index) * 8
+			field[index] = byte(value >> shift)
+		}
+	}
 }
 
 func (c Codec) fieldStart(data []byte, index uint64) (uint64, error) {
