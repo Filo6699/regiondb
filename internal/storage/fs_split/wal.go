@@ -34,11 +34,8 @@ type walRecord struct {
 }
 
 func (s *Store) appendWAL(record []byte) error {
-	if _, err := s.wal.Seek(0, io.SeekEnd); err != nil {
-		return fmt.Errorf("seek WAL end: %w", err)
-	}
-	if _, err := s.wal.Write(record); err != nil {
-		return fmt.Errorf("append WAL: %w", err)
+	if err := appendWALHandle(s.wal, record); err != nil {
+		return err
 	}
 	if err := s.runWALFailpoint(walRecordAppended); err != nil {
 		return err

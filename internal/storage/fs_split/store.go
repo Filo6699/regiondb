@@ -173,7 +173,7 @@ func openWAL(
 	failpoint func(atomicWriteBoundary) error,
 ) (*os.File, error) {
 	path := filepath.Join(root, walName)
-	wal, err := os.OpenFile(path, os.O_RDWR, 0o600)
+	wal, err := openWALHandle(path)
 	if err == nil {
 		return wal, nil
 	}
@@ -187,7 +187,7 @@ func openWAL(
 	if err := writeAtomic(path, nil, true, failpoint); err != nil {
 		return nil, fmt.Errorf("create durable WAL: %w", err)
 	}
-	return os.OpenFile(path, os.O_RDWR, 0o600)
+	return openWALHandle(path)
 }
 
 func (s *Store) Close() error {

@@ -1,0 +1,40 @@
+regiondb WAL handle reuse benchmark
+date: 2026-07-30
+parent commit: 72e5222ab4e36c503c1441b0389d60074f156655
+command: go test ./internal/storage/fs_split -run '^$' -bench 'Benchmark(AppendWAL|ChunkCacheEviction)$' -benchmem -count=5
+
+goos: linux
+goarch: amd64
+pkg: github.com/Filo6699/regiondb/internal/storage/fs_split
+cpu: 11th Gen Intel(R) Core(TM) i5-11300H @ 3.10GHz
+
+baseline: retained WAL handle with Seek(0, io.SeekEnd) before each Write
+BenchmarkAppendWAL-8    2261049    504.9 ns/op    81.20 MB/s    0 B/op    0 allocs/op
+BenchmarkAppendWAL-8    2256501    528.8 ns/op    77.53 MB/s    0 B/op    0 allocs/op
+BenchmarkAppendWAL-8    2248068    525.1 ns/op    78.08 MB/s    0 B/op    0 allocs/op
+BenchmarkAppendWAL-8    2368192    513.3 ns/op    79.87 MB/s    0 B/op    0 allocs/op
+BenchmarkAppendWAL-8    2361759    511.1 ns/op    80.22 MB/s    0 B/op    0 allocs/op
+
+optimized: retained WAL handle opened with os.O_APPEND
+BenchmarkAppendWAL-8    3882595    332.4 ns/op    123.34 MB/s    0 B/op    0 allocs/op
+BenchmarkAppendWAL-8    3761648    323.8 ns/op    126.62 MB/s    0 B/op    0 allocs/op
+BenchmarkAppendWAL-8    3538189    317.3 ns/op    129.21 MB/s    0 B/op    0 allocs/op
+BenchmarkAppendWAL-8    3630819    321.5 ns/op    127.53 MB/s    0 B/op    0 allocs/op
+BenchmarkAppendWAL-8    3876337    333.9 ns/op    122.81 MB/s    0 B/op    0 allocs/op
+
+optimized cache eviction:
+BenchmarkChunkCacheEviction/residents-1-8        53.96 ns/op    0 B/op    0 allocs/op
+BenchmarkChunkCacheEviction/residents-1-8        55.81 ns/op    0 B/op    0 allocs/op
+BenchmarkChunkCacheEviction/residents-1-8        50.60 ns/op    0 B/op    0 allocs/op
+BenchmarkChunkCacheEviction/residents-1-8        52.90 ns/op    0 B/op    0 allocs/op
+BenchmarkChunkCacheEviction/residents-1-8        50.58 ns/op    0 B/op    0 allocs/op
+BenchmarkChunkCacheEviction/residents-1024-8     79.35 ns/op    0 B/op    0 allocs/op
+BenchmarkChunkCacheEviction/residents-1024-8     81.00 ns/op    0 B/op    0 allocs/op
+BenchmarkChunkCacheEviction/residents-1024-8     80.13 ns/op    0 B/op    0 allocs/op
+BenchmarkChunkCacheEviction/residents-1024-8     77.85 ns/op    0 B/op    0 allocs/op
+BenchmarkChunkCacheEviction/residents-1024-8     80.51 ns/op    0 B/op    0 allocs/op
+BenchmarkChunkCacheEviction/residents-65536-8   131.4 ns/op     0 B/op    0 allocs/op
+BenchmarkChunkCacheEviction/residents-65536-8   130.4 ns/op     0 B/op    0 allocs/op
+BenchmarkChunkCacheEviction/residents-65536-8   123.9 ns/op     0 B/op    0 allocs/op
+BenchmarkChunkCacheEviction/residents-65536-8   126.7 ns/op     0 B/op    0 allocs/op
+BenchmarkChunkCacheEviction/residents-65536-8   131.3 ns/op     0 B/op    0 allocs/op

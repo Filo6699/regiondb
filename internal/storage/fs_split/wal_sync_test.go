@@ -95,6 +95,30 @@ func TestCloseSyncsWALWhileHandleIsStillOpen(t *testing.T) {
 	}
 }
 
+func TestStoreReusesAppendHandleAcrossCheckpoints(t *testing.T) {
+	t.Parallel()
+
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 8})
+	store := mustOpenWithOptions(t, testTempDir(t), g, Options{
+		Durability:        DurabilityFsyncCheckpoint,
+		CheckpointRecords: 1,
+	})
+	appendHandle := store.wal
+
+	for update := range 8 {
+		chunk := mustChunk(t, g)
+		if err := chunk.Set(geometry.Offset{}, uint64(update)); err != nil {
+			t.Fatalf("Set(%d): %v", update, err)
+		}
+		if err := store.WriteChunk(geometry.Coord{X: int64(update)}, chunk); err != nil {
+			t.Fatalf("WriteChunk(%d): %v", update, err)
+		}
+		if store.wal != appendHandle {
+			t.Fatalf("WAL append handle changed after checkpoint %d", update)
+		}
+	}
+}
+
 func readWALRecords(t *testing.T, store *Store, path string) []walRecord {
 	t.Helper()
 
