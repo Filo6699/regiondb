@@ -118,7 +118,8 @@ These modes describe single-host filesystem calls. Hardware and filesystem
 behavior can impose weaker guarantees. There is no tombstone or alternate
 backend compatibility contract. The separately versioned
 [experimental region layout](EXPERIMENTAL_REGION_FORMAT.md) is opt-in, is not
-selectable from the server, and is part of no contract described here.
+selectable from the server, is not production-supported, and is part of no
+contract described here.
 
 Decoded chunks are retained in a bounded in-memory LRU cache. Eviction changes
 only memory use: a later read reloads and validates the chunk file. Cache state

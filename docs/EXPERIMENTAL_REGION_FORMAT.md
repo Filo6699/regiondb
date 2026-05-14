@@ -9,6 +9,9 @@ The layout is opt-in and versioned independently of `fs_split_v1`. It is not
 selectable from the server or any command-line tool, it is covered by no
 compatibility promise, and its images may change or disappear without a
 migration path. Production data directories keep using `fs_split_v1`.
+`fs_region_v1` is experimental-only and is not a production-supported backend
+in this release line. Benchmark results for it do not establish support,
+durability, migration, or compatibility guarantees.
 
 This document uses regular chunk, large chunk, and chunk coordinate as defined
 by the [project terminology](TERMINOLOGY.md).
