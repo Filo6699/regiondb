@@ -142,6 +142,7 @@ func infoPayload(stats storage.RuntimeStats) []byte {
 	payload = appendInfoCounter(payload, "dirty_chunks", stats.DirtyChunks)
 	payload = appendInfoCounter(payload, "evictions", stats.Evictions)
 	payload = appendInfoCounter(payload, "wal_flushes", stats.WALFlushes)
+	payload = appendInfoCounter(payload, "open_wal_handles", stats.OpenWALHandles)
 	return appendInfoCounter(payload, "checkpoints", stats.Checkpoints)
 }
 

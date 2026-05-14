@@ -72,7 +72,7 @@ func TestCloseSyncsWALWhileHandleIsStillOpen(t *testing.T) {
 		CheckpointBytes:       1 << 20,
 		WALGroupCommitUpdates: 4,
 	})
-	handle := store.wal
+	handle := store.walHandles.handles[walAppendHandle].file
 
 	chunk := mustChunk(t, g)
 	if err := chunk.Set(geometry.Offset{}, 5); err != nil {
@@ -103,7 +103,7 @@ func TestStoreReusesAppendHandleAcrossCheckpoints(t *testing.T) {
 		Durability:        DurabilityFsyncCheckpoint,
 		CheckpointRecords: 1,
 	})
-	appendHandle := store.wal
+	appendHandle := store.walHandles.handles[walAppendHandle].file
 
 	for update := range 8 {
 		chunk := mustChunk(t, g)
@@ -113,7 +113,7 @@ func TestStoreReusesAppendHandleAcrossCheckpoints(t *testing.T) {
 		if err := store.WriteChunk(geometry.Coord{X: int64(update)}, chunk); err != nil {
 			t.Fatalf("WriteChunk(%d): %v", update, err)
 		}
-		if store.wal != appendHandle {
+		if store.walHandles.handles[walAppendHandle].file != appendHandle {
 			t.Fatalf("WAL append handle changed after checkpoint %d", update)
 		}
 	}

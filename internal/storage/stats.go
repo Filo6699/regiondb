@@ -12,5 +12,6 @@ type RuntimeStats struct {
 	DirtyChunks     uint64
 	Evictions       uint64
 	WALFlushes      uint64
+	OpenWALHandles  uint64
 	Checkpoints     uint64
 }

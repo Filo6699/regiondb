@@ -34,7 +34,13 @@ type walRecord struct {
 }
 
 func (s *Store) appendWAL(record []byte) error {
-	if err := appendWALHandle(s.wal, record); err != nil {
+	wal, err := s.walHandles.acquire(walAppendHandle)
+	if err != nil {
+		return fmt.Errorf("acquire WAL append handle: %w", err)
+	}
+	err = appendWALHandle(wal, record)
+	s.walHandles.release(walAppendHandle)
+	if err != nil {
 		return err
 	}
 	if err := s.runWALFailpoint(walRecordAppended); err != nil {
@@ -51,11 +57,17 @@ func (s *Store) appendWAL(record []byte) error {
 	return nil
 }
 
-// syncWAL flushes the append handle the store keeps open for the whole session.
-// os.File.Sync maps to FlushFileBuffers on Windows, which reports the write
-// handle as durable without closing it, so the handle stays usable afterwards.
+// syncWAL flushes a checked-out append handle. os.File.Sync maps to
+// FlushFileBuffers on Windows, which reports the write handle as durable
+// without closing it, so the pool can reuse the handle afterwards.
 func (s *Store) syncWAL() error {
-	if err := s.wal.Sync(); err != nil {
+	wal, err := s.walHandles.acquire(walAppendHandle)
+	if err != nil {
+		return fmt.Errorf("acquire WAL append handle: %w", err)
+	}
+	err = wal.Sync()
+	s.walHandles.release(walAppendHandle)
+	if err != nil {
 		return fmt.Errorf("sync WAL: %w", err)
 	}
 	if err := s.runWALFailpoint(walRecordSynced); err != nil {
@@ -127,10 +139,16 @@ func (s *Store) decodeWALRecord(encoded []byte) (walRecord, error) {
 }
 
 func (s *Store) scanWAL(visit func(walRecord) error) (int64, uint64, error) {
-	if _, err := s.wal.Seek(0, io.SeekStart); err != nil {
+	wal, err := s.walHandles.acquire(walScanHandle)
+	if err != nil {
+		return 0, 0, fmt.Errorf("acquire WAL scan handle: %w", err)
+	}
+	defer s.walHandles.release(walScanHandle)
+
+	if _, err := wal.Seek(0, io.SeekStart); err != nil {
 		return 0, 0, fmt.Errorf("seek WAL start: %w", err)
 	}
-	info, err := s.wal.Stat()
+	info, err := wal.Stat()
 	if err != nil {
 		return 0, 0, fmt.Errorf("stat WAL: %w", err)
 	}
@@ -142,7 +160,7 @@ func (s *Store) scanWAL(visit func(walRecord) error) (int64, uint64, error) {
 	encoded := make([]byte, recordBytes)
 	var count uint64
 	for offset := int64(0); offset < completeBytes; offset += int64(recordBytes) {
-		if _, err := io.ReadFull(s.wal, encoded); err != nil {
+		if _, err := io.ReadFull(wal, encoded); err != nil {
 			return 0, 0, fmt.Errorf("read WAL record: %w", err)
 		}
 		record, err := s.decodeWALRecord(encoded)
@@ -177,16 +195,24 @@ func (s *Store) recoverWAL() error {
 	}); err != nil {
 		return fmt.Errorf("recover WAL: %w", err)
 	}
-	info, err := s.wal.Stat()
+	wal, err := s.walHandles.acquire(walAppendHandle)
 	if err != nil {
+		return fmt.Errorf("acquire WAL append handle after replay: %w", err)
+	}
+	info, err := wal.Stat()
+	if err != nil {
+		s.walHandles.release(walAppendHandle)
 		return fmt.Errorf("stat WAL after replay: %w", err)
 	}
 	if completeBytes != info.Size() {
-		if err := s.wal.Truncate(completeBytes); err != nil {
+		if err := wal.Truncate(completeBytes); err != nil {
+			s.walHandles.release(walAppendHandle)
 			return fmt.Errorf("discard truncated WAL tail: %w", err)
 		}
 	}
-	if recordCount != 0 || completeBytes != info.Size() {
+	sizeAfterReplay := info.Size()
+	s.walHandles.release(walAppendHandle)
+	if recordCount != 0 || completeBytes != sizeAfterReplay {
 		if err := s.clearWAL(syncData); err != nil {
 			return fmt.Errorf("finish WAL recovery: %w", err)
 		}
@@ -221,17 +247,23 @@ func (s *Store) checkpointWAL() error {
 }
 
 func (s *Store) clearWAL(syncData bool) error {
-	if err := s.wal.Truncate(0); err != nil {
+	wal, err := s.walHandles.acquire(walAppendHandle)
+	if err != nil {
+		return fmt.Errorf("acquire WAL append handle: %w", err)
+	}
+	defer s.walHandles.release(walAppendHandle)
+
+	if err := wal.Truncate(0); err != nil {
 		return fmt.Errorf("truncate WAL: %w", err)
 	}
 	if err := s.runWALFailpoint(walCheckpointTruncated); err != nil {
 		return err
 	}
-	if _, err := s.wal.Seek(0, io.SeekStart); err != nil {
+	if _, err := wal.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("rewind WAL: %w", err)
 	}
 	if syncData {
-		if err := s.wal.Sync(); err != nil {
+		if err := wal.Sync(); err != nil {
 			return fmt.Errorf("sync truncated WAL: %w", err)
 		}
 		if err := s.runWALFailpoint(walCheckpointSynced); err != nil {

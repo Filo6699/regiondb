@@ -1068,6 +1068,7 @@ func TestOpenRejectsInvalidOptions(t *testing.T) {
 		{Durability: "unknown"},
 		{CheckpointBytes: -1},
 		{MaxLoadedChunks: -1},
+		{MaxOpenWALHandles: -1},
 	} {
 		if _, err := OpenWithOptions(testTempDir(t), g, options); err == nil {
 			t.Fatalf("OpenWithOptions(%+v) succeeded", options)
@@ -1156,6 +1157,7 @@ func TestStoreRuntimeStats(t *testing.T) {
 		LoadedChunks:    1,
 		Evictions:       1,
 		WALFlushes:      3,
+		OpenWALHandles:  2,
 		Checkpoints:     1,
 	}
 	if got := store.RuntimeStats(); got != want {

@@ -35,7 +35,7 @@ type Store struct {
 	root                 string
 	geometry             geometry.Geometry
 	options              Options
-	wal                  *os.File
+	walHandles           *walHandlePool
 	writerLock           *writerLock
 	cache                *chunkCache
 	walRecords           uint64
@@ -72,6 +72,9 @@ func (s *Store) RuntimeStats() storage.RuntimeStats {
 	// fs_split writes each chunk before admitting it to the cache, so it has
 	// no dirty resident state to report.
 	stats.WALFlushes = s.walFlushCount.Load()
+	if s.walHandles != nil {
+		stats.OpenWALHandles = s.walHandles.stats().open
+	}
 	stats.Checkpoints = s.checkpointCount.Load()
 	return stats
 }
@@ -147,7 +150,7 @@ func openStore(
 		return nil, fmt.Errorf("open WAL: %w", err)
 	}
 	defer func() {
-		if returnErr != nil {
+		if returnErr != nil && wal != nil {
 			if err := wal.Close(); err != nil {
 				returnErr = errors.Join(returnErr, fmt.Errorf("close WAL: %w", err))
 			}
@@ -155,14 +158,22 @@ func openStore(
 	}()
 
 	store := &Store{
-		root:       absoluteRoot,
-		geometry:   g,
-		options:    options,
-		wal:        wal,
+		root:     absoluteRoot,
+		geometry: g,
+		options:  options,
+		walHandles: newWALHandlePool(
+			filepath.Join(absoluteRoot, walName),
+			options.MaxOpenWALHandles,
+			wal,
+		),
 		writerLock: lock,
 		cache:      newChunkCache(g, options.MaxLoadedChunks),
 	}
+	wal = nil
 	if err := store.recoverWAL(); err != nil {
+		if closeErr := store.walHandles.close(); closeErr != nil {
+			return nil, errors.Join(err, closeErr)
+		}
 		return nil, err
 	}
 	return store, nil
@@ -199,7 +210,7 @@ func (s *Store) Close() error {
 	}
 	s.closed = true
 	var result error
-	if s.wal != nil {
+	if s.walHandles != nil {
 		// The pending tail has to be flushed before the handle is released:
 		// os.File.Sync rejects a closed file, so no platform offers a
 		// close-then-flush ordering.
@@ -208,10 +219,10 @@ func (s *Store) Close() error {
 				result = errors.Join(result, err)
 			}
 		}
-		if err := s.wal.Close(); err != nil {
-			result = errors.Join(result, fmt.Errorf("close WAL: %w", err))
+		if err := s.walHandles.close(); err != nil {
+			result = errors.Join(result, err)
 		}
-		s.wal = nil
+		s.walHandles = nil
 	}
 	if s.writerLock != nil {
 		if err := s.writerLock.release(); err != nil {

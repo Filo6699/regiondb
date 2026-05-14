@@ -21,15 +21,15 @@ func BenchmarkAppendWAL(b *testing.B) {
 		b.Fatal(err)
 	}
 	store := &Store{
-		geometry: g,
-		options:  Options{Durability: DurabilityRelaxed},
-		wal:      wal,
+		geometry:   g,
+		options:    Options{Durability: DurabilityRelaxed},
+		walHandles: newWALHandlePool(wal.Name(), DefaultMaxOpenWALHandles, wal),
 	}
 	record := store.encodeWALRecord(geometry.Coord{X: -17, Y: 29}, []byte{0xa5})
 
 	b.Cleanup(func() {
-		if err := wal.Close(); err != nil {
-			b.Errorf("close WAL: %v", err)
+		if err := store.walHandles.close(); err != nil {
+			b.Errorf("close WAL handles: %v", err)
 		}
 	})
 	b.SetBytes(int64(len(record)))

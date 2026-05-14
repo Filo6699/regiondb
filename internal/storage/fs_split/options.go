@@ -9,6 +9,7 @@ const (
 	DefaultCheckpointRecords     = 1024
 	DefaultCheckpointBytes       = 64 << 20
 	DefaultMaxLoadedChunks       = 1024
+	DefaultMaxOpenWALHandles     = 2
 	DefaultWALGroupCommitUpdates = 1
 )
 
@@ -26,6 +27,7 @@ type Options struct {
 	CheckpointRecords     uint64
 	CheckpointBytes       int64
 	MaxLoadedChunks       int
+	MaxOpenWALHandles     int
 	WALGroupCommitUpdates uint64
 }
 
@@ -52,6 +54,12 @@ func (options Options) validated() (Options, error) {
 	}
 	if options.MaxLoadedChunks < 0 {
 		return Options{}, errors.New("maximum loaded chunks must be positive")
+	}
+	if options.MaxOpenWALHandles == 0 {
+		options.MaxOpenWALHandles = DefaultMaxOpenWALHandles
+	}
+	if options.MaxOpenWALHandles < 0 {
+		return Options{}, errors.New("maximum open WAL handles must be positive")
 	}
 	if options.WALGroupCommitUpdates == 0 {
 		options.WALGroupCommitUpdates = DefaultWALGroupCommitUpdates
