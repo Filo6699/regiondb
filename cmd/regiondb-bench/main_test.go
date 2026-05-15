@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -64,6 +65,7 @@ func TestRunQuickTCPBenchmark(t *testing.T) {
 	if err := run(context.Background(), []string{
 		"-address", listener.Addr().String(),
 		"-token", "secret",
+		"-clients", "2",
 		"-seed", "23",
 		"-ops", "12",
 		"-workload", "mixed",
@@ -85,6 +87,9 @@ func TestRunQuickTCPBenchmark(t *testing.T) {
 		result.ServerMode != serverModeExternal ||
 		result.Geometry.ChunkEdge != 2 {
 		t.Fatalf("configuration output = %+v", result)
+	}
+	if result.RequestedClients != 2 || result.ActiveClients != 2 || result.ConnectionFailures != 0 {
+		t.Fatalf("client output = %+v", result)
 	}
 	if result.LockModes.Process == "" || result.LockModes.Chunk != "shared-rwmutex" {
 		t.Fatalf("lock mode output = %+v", result.LockModes)
@@ -137,10 +142,37 @@ func TestParseConfigAcceptsExplicitSpawnMode(t *testing.T) {
 	for _, args := range [][]string{
 		{"-token", "secret", "-server-mode", "unknown"},
 		{"-token", "secret", "-server-mode", "spawn", "-server-binary", ""},
+		{"-token", "secret", "-clients", "0"},
+		{"-token", "secret", "-clients", "10000001"},
 	} {
 		if _, err := parseConfig(args, &bytes.Buffer{}); err == nil {
 			t.Fatalf("parseConfig(%q) succeeded", args)
 		}
+	}
+}
+
+func TestOpenClientsReportsRequestedOutcome(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("connection refused")
+	clients, failures, err := openClients(3, func(index int) (*client, error) {
+		if index == 1 {
+			return nil, wantErr
+		}
+		return &client{}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(clients) != 2 || failures != 1 {
+		t.Fatalf("openClients() active = %d, failures = %d", len(clients), failures)
+	}
+
+	clients, failures, err = openClients(2, func(int) (*client, error) {
+		return nil, wantErr
+	})
+	if len(clients) != 0 || failures != 2 || !errors.Is(err, wantErr) {
+		t.Fatalf("openClients() = (%d clients, %d failures, %v)", len(clients), failures, err)
 	}
 }
 

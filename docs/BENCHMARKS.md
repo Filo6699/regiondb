@@ -26,7 +26,9 @@ The direct benchmark requires its own `-data-dir`. Its `-durability` setting
 selects one of the existing storage durability modes. The TCP benchmark uses
 an external server at `127.0.0.1:4242` by default and requires `-token`. Its
 geometry flags should match the server configuration; `chunk-edge` and
-`block-bits` determine the packed chunk payload length.
+`block-bits` determine the packed chunk payload length. `-clients` requests
+multiple authenticated connections; measured operations are distributed
+round-robin across the connections that were established successfully.
 
 For example:
 
@@ -71,8 +73,9 @@ duration, working-set size, operations per second, and latency minimum, p50,
 p95, p99, and maximum. It also records the geometry; direct results include
 durability and TCP results include the server mode and address without the
 authentication token. Both results record the active process and chunk lock
-modes. Durations and latencies use nanoseconds, and percentiles use the
-nearest-rank method.
+modes. TCP results also distinguish requested and active clients and count
+connection failures. Durations and latencies use nanoseconds, and percentiles
+use the nearest-rank method.
 
 The reproducible direct benchmark bundle copies `process_lock_mode` and
 `chunk_lock_mode` from the raw result into its manifest. This makes the

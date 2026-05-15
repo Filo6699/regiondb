@@ -48,16 +48,20 @@ type config struct {
 	token        string
 	serverMode   serverMode
 	serverBinary string
+	clients      int
 	scenario     benchmark.Config
 	geometry     geometry.Config
 }
 
 type output struct {
 	benchmark.Result
-	Address    string              `json:"address"`
-	ServerMode serverMode          `json:"server_mode"`
-	Geometry   benchmark.Geometry  `json:"geometry"`
-	LockModes  benchmark.LockModes `json:"lock_modes"`
+	Address            string              `json:"address"`
+	ServerMode         serverMode          `json:"server_mode"`
+	RequestedClients   int                 `json:"requested_clients"`
+	ActiveClients      int                 `json:"active_clients"`
+	ConnectionFailures int                 `json:"connection_failures"`
+	Geometry           benchmark.Geometry  `json:"geometry"`
+	LockModes          benchmark.LockModes `json:"lock_modes"`
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -79,14 +83,21 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 			_ = spawned.close()
 		}()
 	}
-	client, err := dialBenchmarkClient(ctx, config, g, spawned)
+	clients, connectionFailures, err := openClients(config.clients, func(index int) (*client, error) {
+		if index == 0 && spawned != nil {
+			return dialBenchmarkClient(ctx, config, g, spawned)
+		}
+		return dialClient(ctx, config.address, config.token, g)
+	})
 	if err != nil {
 		return err
 	}
 	defer func() {
-		_ = client.close()
+		for _, client := range clients {
+			_ = client.close()
+		}
 	}()
-	lockModes, err := client.lockModes(ctx)
+	lockModes, err := clients[0].lockModes(ctx)
 	if err != nil {
 		return fmt.Errorf("read server lock modes: %w", err)
 	}
@@ -96,14 +107,18 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if config.scenario.Workload != benchmark.WorkloadWrite {
-		for _, coord := range coordinates {
+		for index, coord := range coordinates {
+			client := clients[index%len(clients)]
 			if err := client.writeChunk(ctx, coord, 0); err != nil {
 				return fmt.Errorf("prepare chunk (%d,%d): %w", coord.X, coord.Y, err)
 			}
 		}
 	}
 
+	nextClient := 0
 	result, err := benchmark.Run(ctx, "tcp", config.scenario, func(operation benchmark.Operation) error {
+		client := clients[nextClient%len(clients)]
+		nextClient++
 		switch operation.Kind {
 		case benchmark.OperationRead:
 			return client.readChunk(ctx, operation.Coord)
@@ -117,11 +132,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("run TCP benchmark: %w", err)
 	}
 	if err := json.NewEncoder(stdout).Encode(output{
-		Result:     result,
-		Address:    config.address,
-		ServerMode: config.serverMode,
-		Geometry:   benchmark.GeometryFrom(config.geometry),
-		LockModes:  lockModes,
+		Result:             result,
+		Address:            config.address,
+		ServerMode:         config.serverMode,
+		RequestedClients:   config.clients,
+		ActiveClients:      len(clients),
+		ConnectionFailures: connectionFailures,
+		Geometry:           benchmark.GeometryFrom(config.geometry),
+		LockModes:          lockModes,
 	}); err != nil {
 		return fmt.Errorf("write benchmark result: %w", err)
 	}
@@ -141,6 +159,7 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	flags.StringVar(&result.token, "token", "", "server authentication token")
 	flags.Var(&result.serverMode, "server-mode", "server mode: external or spawn")
 	flags.StringVar(&result.serverBinary, "server-binary", "regiondb", "regiondb server binary used in spawn mode")
+	flags.IntVar(&result.clients, "clients", 1, "number of server connections")
 	flags.Int64Var(&result.scenario.Seed, "seed", benchmark.DefaultSeed, "workload random seed")
 	flags.IntVar(&result.scenario.Operations, "ops", benchmark.DefaultOperations, "number of measured operations")
 	flags.StringVar(&workload, "workload", string(benchmark.WorkloadMixed), "workload: read, write, or mixed")
@@ -171,6 +190,12 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	default:
 		return config{}, fmt.Errorf("unknown -server-mode %q", result.serverMode)
 	}
+	if result.clients <= 0 {
+		return config{}, errors.New("-clients must be positive")
+	}
+	if result.clients > benchmark.MaxOperations {
+		return config{}, fmt.Errorf("-clients must not exceed %d", benchmark.MaxOperations)
+	}
 	result.scenario.Workload = benchmark.Workload(workload)
 	if err := result.scenario.Validate(); err != nil {
 		return config{}, err
@@ -184,6 +209,32 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 		BlockBits:      uint8(blockBits),
 	}
 	return result, nil
+}
+
+func openClients(
+	requested int,
+	connect func(index int) (*client, error),
+) ([]*client, int, error) {
+	clients := make([]*client, 0, requested)
+	connectionFailures := 0
+	var lastErr error
+	for index := range requested {
+		client, err := connect(index)
+		if err != nil {
+			connectionFailures++
+			lastErr = err
+			continue
+		}
+		clients = append(clients, client)
+	}
+	if len(clients) == 0 {
+		return nil, connectionFailures, fmt.Errorf(
+			"establish benchmark clients: %d connection failures: %w",
+			connectionFailures,
+			lastErr,
+		)
+	}
+	return clients, connectionFailures, nil
 }
 
 func (m *serverMode) Set(value string) error {
