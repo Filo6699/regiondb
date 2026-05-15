@@ -12,7 +12,9 @@ import (
 	"math"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -25,6 +27,13 @@ import (
 
 const networkTimeout = 5 * time.Second
 
+type serverMode string
+
+const (
+	serverModeExternal serverMode = "external"
+	serverModeSpawn    serverMode = "spawn"
+)
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -35,17 +44,20 @@ func main() {
 }
 
 type config struct {
-	address  string
-	token    string
-	scenario benchmark.Config
-	geometry geometry.Config
+	address      string
+	token        string
+	serverMode   serverMode
+	serverBinary string
+	scenario     benchmark.Config
+	geometry     geometry.Config
 }
 
 type output struct {
 	benchmark.Result
-	Address   string              `json:"address"`
-	Geometry  benchmark.Geometry  `json:"geometry"`
-	LockModes benchmark.LockModes `json:"lock_modes"`
+	Address    string              `json:"address"`
+	ServerMode serverMode          `json:"server_mode"`
+	Geometry   benchmark.Geometry  `json:"geometry"`
+	LockModes  benchmark.LockModes `json:"lock_modes"`
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -57,7 +69,17 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("configure geometry: %w", err)
 	}
-	client, err := dialClient(ctx, config.address, config.token, g)
+	var spawned *spawnedServer
+	if config.serverMode == serverModeSpawn {
+		spawned, err = spawnServer(config, stderr)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			_ = spawned.close()
+		}()
+	}
+	client, err := dialBenchmarkClient(ctx, config, g, spawned)
 	if err != nil {
 		return err
 	}
@@ -95,10 +117,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("run TCP benchmark: %w", err)
 	}
 	if err := json.NewEncoder(stdout).Encode(output{
-		Result:    result,
-		Address:   config.address,
-		Geometry:  benchmark.GeometryFrom(config.geometry),
-		LockModes: lockModes,
+		Result:     result,
+		Address:    config.address,
+		ServerMode: config.serverMode,
+		Geometry:   benchmark.GeometryFrom(config.geometry),
+		LockModes:  lockModes,
 	}); err != nil {
 		return fmt.Errorf("write benchmark result: %w", err)
 	}
@@ -116,6 +139,8 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	var blockBits uint64
 	flags.StringVar(&result.address, "address", server.DefaultAddress, "server TCP address in host:port form")
 	flags.StringVar(&result.token, "token", "", "server authentication token")
+	flags.Var(&result.serverMode, "server-mode", "server mode: external or spawn")
+	flags.StringVar(&result.serverBinary, "server-binary", "regiondb", "regiondb server binary used in spawn mode")
 	flags.Int64Var(&result.scenario.Seed, "seed", benchmark.DefaultSeed, "workload random seed")
 	flags.IntVar(&result.scenario.Operations, "ops", benchmark.DefaultOperations, "number of measured operations")
 	flags.StringVar(&workload, "workload", string(benchmark.WorkloadMixed), "workload: read, write, or mixed")
@@ -134,6 +159,18 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	if result.token == "" {
 		return config{}, errors.New("-token is required")
 	}
+	if result.serverMode == "" {
+		result.serverMode = serverModeExternal
+	}
+	switch result.serverMode {
+	case serverModeExternal:
+	case serverModeSpawn:
+		if result.serverBinary == "" {
+			return config{}, errors.New("-server-binary must not be empty in spawn mode")
+		}
+	default:
+		return config{}, fmt.Errorf("unknown -server-mode %q", result.serverMode)
+	}
 	result.scenario.Workload = benchmark.Workload(workload)
 	if err := result.scenario.Validate(); err != nil {
 		return config{}, err
@@ -147,6 +184,109 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 		BlockBits:      uint8(blockBits),
 	}
 	return result, nil
+}
+
+func (m *serverMode) Set(value string) error {
+	*m = serverMode(value)
+	return nil
+}
+
+func (m *serverMode) String() string {
+	return string(*m)
+}
+
+type spawnedServer struct {
+	command *exec.Cmd
+	done    chan error
+	dataDir string
+}
+
+func spawnServer(config config, stderr io.Writer) (*spawnedServer, error) {
+	dataDir, err := os.MkdirTemp("", "regiondb-bench-")
+	if err != nil {
+		return nil, fmt.Errorf("create spawned server data directory: %w", err)
+	}
+	command := exec.Command(
+		config.serverBinary,
+		"-listen", config.address,
+		"-data-dir", filepath.Join(dataDir, "data"),
+		"-token", config.token,
+		"-chunk-edge", strconv.FormatUint(uint64(config.geometry.ChunkEdge), 10),
+		"-large-chunk-edge", strconv.FormatUint(uint64(config.geometry.LargeChunkEdge), 10),
+		"-block-bits", strconv.FormatUint(uint64(config.geometry.BlockBits), 10),
+	)
+	command.Stdout = io.Discard
+	command.Stderr = stderr
+	if err := command.Start(); err != nil {
+		_ = os.RemoveAll(dataDir)
+		return nil, fmt.Errorf("start regiondb server: %w", err)
+	}
+	result := &spawnedServer{
+		command: command,
+		done:    make(chan error, 1),
+		dataDir: dataDir,
+	}
+	go func() {
+		result.done <- command.Wait()
+		close(result.done)
+	}()
+	return result, nil
+}
+
+func (s *spawnedServer) close() error {
+	if s == nil || s.command.Process == nil {
+		return nil
+	}
+	defer func() {
+		_ = os.RemoveAll(s.dataDir)
+	}()
+	select {
+	case err := <-s.done:
+		return err
+	default:
+	}
+	if err := s.command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return fmt.Errorf("stop spawned regiondb server: %w", err)
+	}
+	if err := <-s.done; err != nil {
+		var exitError *exec.ExitError
+		if !errors.As(err, &exitError) {
+			return fmt.Errorf("wait for spawned regiondb server: %w", err)
+		}
+	}
+	return nil
+}
+
+func dialBenchmarkClient(
+	ctx context.Context,
+	config config,
+	g geometry.Geometry,
+	spawned *spawnedServer,
+) (*client, error) {
+	if spawned == nil {
+		return dialClient(ctx, config.address, config.token, g)
+	}
+	retry := time.NewTicker(10 * time.Millisecond)
+	defer retry.Stop()
+	timeout := time.NewTimer(networkTimeout)
+	defer timeout.Stop()
+	var lastErr error
+	for {
+		result, err := dialClient(ctx, config.address, config.token, g)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		select {
+		case err := <-spawned.done:
+			return nil, fmt.Errorf("spawned regiondb server exited before accepting connections: %w", err)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timeout.C:
+			return nil, fmt.Errorf("connect to spawned regiondb server: %w", lastErr)
+		case <-retry.C:
+		}
+	}
 }
 
 type client struct {

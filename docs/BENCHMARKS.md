@@ -24,9 +24,9 @@ existing chunks.
 
 The direct benchmark requires its own `-data-dir`. Its `-durability` setting
 selects one of the existing storage durability modes. The TCP benchmark uses
-`127.0.0.1:4242` by default and requires `-token`. Its geometry flags should
-match the server configuration; `chunk-edge` and `block-bits` determine the
-packed chunk payload length.
+an external server at `127.0.0.1:4242` by default and requires `-token`. Its
+geometry flags should match the server configuration; `chunk-edge` and
+`block-bits` determine the packed chunk payload length.
 
 For example:
 
@@ -48,13 +48,28 @@ go run ./cmd/regiondb-bench \
   -workload mixed
 ```
 
+For an isolated local run, build the server and explicitly select spawn mode.
+The benchmark creates and removes a temporary data directory and stops the
+spawned process after the run:
+
+```sh
+go build -o ./regiondb ./cmd/regiondb
+go run ./cmd/regiondb-bench \
+  -server-mode spawn \
+  -server-binary ./regiondb \
+  -token development-secret \
+  -seed 42 \
+  -ops 1000 \
+  -workload mixed
+```
+
 ## Output
 
 Each successful run writes one JSON object to standard output. It records the
 backend, workload, seed, measured operation and read/write counts, total
 duration, working-set size, operations per second, and latency minimum, p50,
 p95, p99, and maximum. It also records the geometry; direct results include
-durability and TCP results include the server address without the
+durability and TCP results include the server mode and address without the
 authentication token. Both results record the active process and chunk lock
 modes. Durations and latencies use nanoseconds, and percentiles use the
 nearest-rank method.
