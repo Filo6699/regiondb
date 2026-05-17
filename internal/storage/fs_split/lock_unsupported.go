@@ -15,6 +15,10 @@ func openWriterGuard(string) (*os.File, error) {
 	return nil, errors.New("exclusive data-directory locking is unsupported on this platform")
 }
 
+func openExistingWriterGuard(string) (*os.File, error) {
+	return nil, errors.New("exclusive data-directory locking is unsupported on this platform")
+}
+
 func closeWriterGuard(*os.File) error {
 	return nil
 }

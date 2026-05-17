@@ -14,7 +14,15 @@ func writerGuardMode() string {
 }
 
 func openWriterGuard(path string) (*os.File, error) {
-	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	return openWriterGuardWithFlags(path, os.O_RDWR|os.O_CREATE)
+}
+
+func openExistingWriterGuard(path string) (*os.File, error) {
+	return openWriterGuardWithFlags(path, os.O_RDWR)
+}
+
+func openWriterGuardWithFlags(path string, flags int) (*os.File, error) {
+	file, err := os.OpenFile(path, flags, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open writer lock: %w", err)
 	}

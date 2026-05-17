@@ -65,6 +65,122 @@ func TestWriterOwnershipRecoversStaleMetadata(t *testing.T) {
 	}
 }
 
+func TestWriterOwnershipMigratesLegacyLockFile(t *testing.T) {
+	t.Parallel()
+
+	root := testTempDir(t)
+	path := filepath.Join(root, lockName)
+	const legacyContents = "legacy writer lock\n"
+	if err := os.WriteFile(path, []byte(legacyContents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	lock, err := acquireWriterLockWithConfig(path, lockConfig{now: fixedTime("2026-03-28T10:00:00Z")})
+	if err != nil {
+		t.Fatalf("acquire writer lock with legacy file: %v", err)
+	}
+	if err := lock.release(); err != nil {
+		t.Fatalf("release migrated writer lock: %v", err)
+	}
+
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("migrated writer lock path mode = %v, want directory", info.Mode())
+	}
+	matches, err := filepath.Glob(path + legacyLockMarker + "*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("legacy writer lock backups = %v, want exactly one", matches)
+	}
+	contents, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != legacyContents {
+		t.Fatalf("legacy writer lock contents = %q, want %q", contents, legacyContents)
+	}
+
+	reopened, err := acquireWriterLockWithConfig(path, lockConfig{now: fixedTime("2026-03-28T10:01:00Z")})
+	if err != nil {
+		t.Fatalf("reopen migrated writer lock: %v", err)
+	}
+	if err := reopened.release(); err != nil {
+		t.Fatalf("release reopened writer lock: %v", err)
+	}
+	afterReopen, err := filepath.Glob(path + legacyLockMarker + "*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(afterReopen) != 1 {
+		t.Fatalf("legacy writer lock backups after reopen = %v, want one", afterReopen)
+	}
+}
+
+func TestWriterOwnershipDoesNotMigrateLockedLegacyFile(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(testTempDir(t), lockName)
+	if err := os.WriteFile(path, []byte("live legacy writer\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := openExistingWriterGuard(path)
+	if err != nil {
+		t.Fatalf("lock legacy writer fixture: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := closeWriterGuard(foreign); err != nil {
+			t.Errorf("release legacy writer fixture: %v", err)
+		}
+	})
+
+	if _, err := acquireWriterLockWithConfig(path, lockConfig{now: fixedTime("2026-03-28T10:00:00Z")}); !errors.Is(err, ErrWriterLocked) {
+		t.Fatalf("acquire writer lock error = %v, want ErrWriterLocked", err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("live legacy writer path mode = %v, want regular file", info.Mode())
+	}
+	matches, err := filepath.Glob(path + legacyLockMarker + "*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("live legacy writer was migrated to %v", matches)
+	}
+}
+
+func TestWriterOwnershipFinishesInterruptedLegacyMigration(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(testTempDir(t), lockName)
+	legacyPath := path + legacyLockMarker + "interrupted"
+	if err := os.WriteFile(legacyPath, []byte("preserved legacy lock\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	lock, err := acquireWriterLockWithConfig(path, lockConfig{now: fixedTime("2026-03-28T10:00:00Z")})
+	if err != nil {
+		t.Fatalf("finish interrupted legacy migration: %v", err)
+	}
+	if err := lock.release(); err != nil {
+		t.Fatalf("release writer lock: %v", err)
+	}
+	if _, err := os.Stat(legacyPath); err != nil {
+		t.Fatalf("preserved legacy backup: %v", err)
+	}
+	if info, err := os.Lstat(path); err != nil || !info.IsDir() {
+		t.Fatalf("writer lock path after recovery = (%v, %v), want directory", info, err)
+	}
+}
+
 func TestWriterOwnershipFailsClosedForFreshOrMalformedMetadata(t *testing.T) {
 	t.Parallel()
 
