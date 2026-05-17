@@ -1120,6 +1120,14 @@ func TestStoreEvictsAndReloadsChunks(t *testing.T) {
 	if !firstLoaded || secondLoaded || loaded != 1 {
 		t.Fatalf("cache after reload: first = %t, second = %t, size = %d", firstLoaded, secondLoaded, loaded)
 	}
+
+	closeStore(t, store)
+	if err := removeTestDirectory(root); err != nil {
+		t.Fatalf("remove cache eviction data directory: %v", err)
+	}
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cache eviction data directory remains after cleanup: %v", err)
+	}
 }
 
 func TestStoreRuntimeStats(t *testing.T) {

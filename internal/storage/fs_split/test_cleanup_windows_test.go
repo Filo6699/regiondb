@@ -15,11 +15,7 @@ func testTempDir(t *testing.T) string {
 
 	directory := t.TempDir()
 	t.Cleanup(func() {
-		err := removeTestDirectoryWithRetry(
-			func() error { return os.RemoveAll(directory) },
-			isRetryableTestCleanupError,
-			time.Sleep,
-		)
+		err := removeTestDirectory(directory)
 		if err == nil {
 			return
 		}
@@ -31,6 +27,14 @@ func testTempDir(t *testing.T) string {
 		t.Errorf("remove temporary directory %q: %v (remaining entries: %q)", directory, err, matches)
 	})
 	return directory
+}
+
+func removeTestDirectory(directory string) error {
+	return removeTestDirectoryWithRetry(
+		func() error { return os.RemoveAll(directory) },
+		isRetryableTestCleanupError,
+		time.Sleep,
+	)
 }
 
 func isRetryableTestCleanupError(err error) bool {
