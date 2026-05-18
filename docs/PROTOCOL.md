@@ -68,13 +68,28 @@ distinct; the [project terminology](TERMINOLOGY.md) defines their names.
 The `INFO` payload contains newline-terminated `key=value` records in this
 fixed order: `regiondb_version`, `process_lock_mode`, `chunk_lock_mode`,
 `cache_hits`, `cache_misses`, `loaded_chunks`, `dirty_chunks`, `evictions`,
-`wal_flushes`, `open_wal_handles`, and `checkpoints`. The version is `1`;
-counters and gauges are unsigned decimal integers. `open_wal_handles` is the
-current number of cached WAL append and scan handles and never exceeds the
-configured storage limit. A writer reports `flock` or `lock-file-ex` as the
-active process lock and `shared-rwmutex` as the chunk access lock. A read-only
-store reports `none` for its process lock. No unbounded or backend-defined keys
-are included.
+`eviction_runs`, `wal_flushes`, `open_wal_handles`, and `checkpoints`. The
+version is `1`; counters and gauges are unsigned decimal integers.
+
+The fields have these meanings:
+
+| Field | Kind | Meaning |
+|---|---|---|
+| `process_lock_mode` | value | Active data-directory writer lock: `flock`, `lock-file-ex`, or `none` for a read-only store. |
+| `chunk_lock_mode` | value | In-process chunk access lock; `fs_split_v1` reports `shared-rwmutex`. |
+| `cache_hits` | counter | Chunk lookups served by a resident cache entry since the store opened. |
+| `cache_misses` | counter | Chunk lookups not resident when requested, including lookups whose file is absent. |
+| `loaded_chunks` | gauge | Current resident chunk count; never exceeds `-max-loaded-chunks`. |
+| `dirty_chunks` | gauge | Current dirty resident count; always zero for write-through `fs_split_v1`. |
+| `evictions` | counter | Resident chunks removed by capacity-driven cache eviction. |
+| `eviction_runs` | counter | High-watermark events that evicted one or more resident chunks. |
+| `wal_flushes` | counter | Successful WAL synchronization calls since the store opened. |
+| `open_wal_handles` | gauge | Current cached WAL append and scan handles; never above the storage limit, which defaults to two. |
+| `checkpoints` | counter | Completed WAL checkpoints since the store opened. |
+
+Counters are monotonic for one store lifetime and reset when the process
+reopens the store. Gauges may increase or decrease. No unbounded or
+backend-defined keys are included.
 
 `CHUNK` and `CHUNKBIN` return `NOT_FOUND` when their chunk file is absent.
 Storage failures are reported with the `STORAGE` code. The binary byte count

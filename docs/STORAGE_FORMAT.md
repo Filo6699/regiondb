@@ -124,6 +124,12 @@ contract described here.
 Decoded chunks are retained in a bounded in-memory LRU cache. Eviction changes
 only memory use: a later read reloads and validates the chunk file. Cache state
 is neither stored in the data directory nor part of the on-disk format.
+`-max-loaded-chunks` is the hard high watermark and defaults to 1,024. On
+reaching it, an admission evicts least-recently-used entries down to
+`high - max(high/4, 1)` before inserting the new entry. The default low
+watermark is therefore 768. Evicted entry and payload allocations are retained
+for reuse, but they are not resident chunks and cannot satisfy reads. This
+hysteresis leaves room for subsequent admissions without another eviction run.
 
 ## Writer ownership metadata
 

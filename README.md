@@ -31,6 +31,25 @@ specification.
 The server listens on `127.0.0.1:4242` by default. Use `-listen` to select a
 different interface or port.
 
+The server defaults are:
+
+| Setting | Default |
+|---|---:|
+| `-listen` | `127.0.0.1:4242` |
+| `-durability` | `relaxed` |
+| `-checkpoint-records` | `1024` |
+| `-checkpoint-bytes` | `67108864` (64 MiB) |
+| `-max-loaded-chunks` | `1024` |
+| `-wal-group-commit-updates` | `1` |
+| `-workers` | current `GOMAXPROCS` |
+| `-accept-queue` | `128` |
+| `-max-line-bytes` | `1048576` |
+
+The cache maximum is its high watermark. Eviction lowers the default
+1,024-entry cache to 768 entries before admissions resume. Authentication,
+data directory, and geometry have no defaults and must be provided explicitly.
+TLS is disabled unless both certificate and key paths are provided.
+
 To enable TLS, provide both files from a PEM certificate/key pair:
 
 ```sh
