@@ -1,0 +1,43 @@
+regiondb cache eviction hysteresis benchmark
+date: 2026-07-30
+parent commit: af08ad25832997bf5682b43127b2766e33bb27d5
+command: go test ./internal/storage/fs_split -run '^$' -bench '^BenchmarkChunkCacheEviction$' -benchmem -count=5
+
+goos: linux
+goarch: amd64
+pkg: github.com/Filo6699/regiondb/internal/storage/fs_split
+cpu: 11th Gen Intel(R) Core(TM) i5-11300H @ 3.10GHz
+
+baseline: one LRU eviction run per admission at capacity
+BenchmarkChunkCacheEviction/residents-1-8          21228774   53.57 ns/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-1-8          23610573   52.19 ns/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-1-8          21038608   53.63 ns/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-1-8          23504992   53.28 ns/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-1-8          23446383   53.95 ns/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-1024-8       17831000   80.54 ns/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-1024-8       15631525   78.44 ns/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-1024-8       18274782   83.61 ns/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-1024-8       17573262   79.28 ns/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-1024-8       15358042   78.31 ns/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-65536-8       9889069   129.6 ns/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-65536-8      10073612   121.0 ns/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-65536-8       9235093   133.2 ns/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-65536-8      11393282   125.0 ns/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-65536-8      10501863   121.8 ns/op   0 B/op   0 allocs/op
+
+hysteresis: high watermark at capacity and low watermark at 75 percent
+BenchmarkChunkCacheEviction/residents-1-8          21695156   59.19 ns/op   1.000 evictions/op   1.000 runs/op      0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-1-8          20798227   56.14 ns/op   1.000 evictions/op   1.000 runs/op      0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-1-8          22142688   57.31 ns/op   1.000 evictions/op   1.000 runs/op      0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-1-8          19725583   59.01 ns/op   1.000 evictions/op   1.000 runs/op      0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-1-8          21945793   57.97 ns/op   1.000 evictions/op   1.000 runs/op      0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-1024-8       16290223   75.21 ns/op   1.000 evictions/op   0.003906 runs/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-1024-8       15240606   76.38 ns/op   1.000 evictions/op   0.003906 runs/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-1024-8       13660432   75.80 ns/op   1.000 evictions/op   0.003906 runs/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-1024-8       15450370   73.64 ns/op   1.000 evictions/op   0.003906 runs/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-1024-8       14891085   77.34 ns/op   1.000 evictions/op   0.003906 runs/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-65536-8       9351735   135.2 ns/op   1.000 evictions/op   0.0000611 runs/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-65536-8       7674495   140.5 ns/op   1.001 evictions/op   0.0000611 runs/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-65536-8      10101703   140.2 ns/op   1.001 evictions/op   0.0000611 runs/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-65536-8       9130098   136.4 ns/op   1.001 evictions/op   0.0000611 runs/op   0 B/op   0 allocs/op
+BenchmarkChunkCacheEviction/residents-65536-8       8150713   144.5 ns/op   1.001 evictions/op   0.0000611 runs/op   0 B/op   0 allocs/op

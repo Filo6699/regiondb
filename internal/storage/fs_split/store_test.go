@@ -337,7 +337,8 @@ func TestStressHotContentionEvictionCycles(t *testing.T) {
 	// payloads agree with the completed writes.
 	store.cache.mu.Lock()
 	residents := len(store.cache.entries)
-	ordered := store.cache.recent.Len()
+	allocated := store.cache.recent.Len()
+	free := len(store.cache.free)
 	for coord, element := range store.cache.entries {
 		entry := element.Value.(*cacheEntry)
 		if entry.coord != coord {
@@ -366,8 +367,13 @@ func TestStressHotContentionEvictionCycles(t *testing.T) {
 		}
 	}
 	store.cache.mu.Unlock()
-	if residents != 2 || ordered != residents {
-		t.Fatalf("cache after stress: residents = %d, recency entries = %d, want 2 and equal", residents, ordered)
+	if residents > 2 || allocated != residents+free {
+		t.Fatalf(
+			"cache after stress: residents = %d, free = %d, allocated entries = %d, want at most 2 residents and allocated = residents + free",
+			residents,
+			free,
+			allocated,
+		)
 	}
 
 	for worker, coord := range coords {
@@ -1164,6 +1170,7 @@ func TestStoreRuntimeStats(t *testing.T) {
 		CacheMisses:     1,
 		LoadedChunks:    1,
 		Evictions:       1,
+		EvictionRuns:    1,
 		WALFlushes:      3,
 		OpenWALHandles:  2,
 		Checkpoints:     1,

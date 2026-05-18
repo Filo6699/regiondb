@@ -70,6 +70,9 @@ func BenchmarkChunkCacheEviction(b *testing.B) {
 					b.Fatal(err)
 				}
 			}
+			stats := cache.runtimeStats()
+			b.ReportMetric(float64(stats.Evictions)/float64(b.N), "evictions/op")
+			b.ReportMetric(float64(stats.EvictionRuns)/float64(b.N), "runs/op")
 		})
 	}
 }

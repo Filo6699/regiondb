@@ -16,21 +16,32 @@ type cacheEntry struct {
 }
 
 type chunkCache struct {
-	geometry  geometry.Geometry
-	max       int
-	mu        sync.Mutex
-	entries   map[geometry.Coord]*list.Element
-	recent    *list.List
-	loaded    atomic.Int64
-	hits      atomic.Uint64
-	misses    atomic.Uint64
-	evictions atomic.Uint64
+	geometry     geometry.Geometry
+	high         int
+	low          int
+	mu           sync.Mutex
+	entries      map[geometry.Coord]*list.Element
+	recent       *list.List
+	free         []*list.Element
+	loaded       atomic.Int64
+	hits         atomic.Uint64
+	misses       atomic.Uint64
+	evictions    atomic.Uint64
+	evictionRuns atomic.Uint64
 }
 
 func newChunkCache(g geometry.Geometry, max int) *chunkCache {
+	// Keep the configured maximum as a hard high watermark. Reclaiming one
+	// quarter of the residents gives subsequent admissions room before another
+	// eviction run; very small caches still reclaim at least one entry.
+	reclaim := max / 4
+	if reclaim == 0 {
+		reclaim = 1
+	}
 	return &chunkCache{
 		geometry: g,
-		max:      max,
+		high:     max,
+		low:      max - reclaim,
 		entries:  make(map[geometry.Coord]*list.Element),
 		recent:   list.New(),
 	}
@@ -75,26 +86,53 @@ func (cache *chunkCache) put(coord geometry.Coord, payload []byte) error {
 		cache.recent.MoveToFront(element)
 		return nil
 	}
-	if cache.recent.Len() < cache.max {
-		buffer := append([]byte(nil), payload...)
-		cache.entries[coord] = cache.recent.PushFront(&cacheEntry{coord: coord, payload: buffer})
-		cache.loaded.Add(1)
-		return nil
+	if len(cache.entries) == cache.high {
+		if cache.high-cache.low == 1 {
+			oldest := cache.recent.Back()
+			entry := oldest.Value.(*cacheEntry)
+			delete(cache.entries, entry.coord)
+			entry.coord = coord
+			copy(entry.payload, payload)
+			cache.recent.MoveToFront(oldest)
+			cache.entries[coord] = oldest
+			cache.evictions.Add(1)
+			cache.evictionRuns.Add(1)
+			return nil
+		}
+		cache.evictToLow()
 	}
 
-	// Sparse workloads evict on nearly every admission. Reusing both the
-	// least-recently-used element and its payload keeps that path constant:
-	// it examines one resident and allocates neither resource instead of
-	// scanning the world.
-	oldest := cache.recent.Back()
-	entry := oldest.Value.(*cacheEntry)
-	delete(cache.entries, entry.coord)
+	var element *list.Element
+	if last := len(cache.free) - 1; last >= 0 {
+		element = cache.free[last]
+		cache.free = cache.free[:last]
+		cache.recent.MoveToFront(element)
+	} else {
+		element = cache.recent.PushFront(&cacheEntry{
+			payload: make([]byte, cache.geometry.PayloadBytes()),
+		})
+	}
+	entry := element.Value.(*cacheEntry)
 	entry.coord = coord
 	copy(entry.payload, payload)
-	cache.recent.MoveToFront(oldest)
-	cache.entries[coord] = oldest
-	cache.evictions.Add(1)
+	cache.entries[coord] = element
+	cache.loaded.Add(1)
 	return nil
+}
+
+func (cache *chunkCache) evictToLow() {
+	evicted := len(cache.entries) - cache.low
+	oldest := cache.recent.Back()
+	for range evicted {
+		previous := oldest.Prev()
+		entry := oldest.Value.(*cacheEntry)
+		delete(cache.entries, entry.coord)
+		cache.free = append(cache.free, oldest)
+		oldest = previous
+	}
+	cache.loaded.Add(-int64(evicted))
+	cache.evictions.Add(uint64(evicted))
+	cache.evictionRuns.Add(1)
 }
 
 func (cache *chunkCache) remove(coord geometry.Coord) {
@@ -106,7 +144,8 @@ func (cache *chunkCache) remove(coord geometry.Coord) {
 		return
 	}
 	delete(cache.entries, coord)
-	cache.recent.Remove(element)
+	cache.recent.MoveToBack(element)
+	cache.free = append(cache.free, element)
 	cache.loaded.Add(-1)
 }
 
@@ -120,5 +159,6 @@ func (cache *chunkCache) runtimeStats() storage.RuntimeStats {
 		CacheMisses:  cache.misses.Load(),
 		LoadedChunks: uint64(cache.loaded.Load()),
 		Evictions:    cache.evictions.Load(),
+		EvictionRuns: cache.evictionRuns.Load(),
 	}
 }

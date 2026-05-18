@@ -46,9 +46,9 @@ func TestSessionAuthentication(t *testing.T) {
 		{
 			name:  "authenticated info",
 			frame: "INFO\r\n",
-			want: "$173\r\nregiondb_version=1\nprocess_lock_mode=\nchunk_lock_mode=\n" +
+			want: "$189\r\nregiondb_version=1\nprocess_lock_mode=\nchunk_lock_mode=\n" +
 				"cache_hits=0\ncache_misses=0\nloaded_chunks=0\n" +
-				"dirty_chunks=0\nevictions=0\nwal_flushes=0\n" +
+				"dirty_chunks=0\nevictions=0\neviction_runs=0\nwal_flushes=0\n" +
 				"open_wal_handles=0\ncheckpoints=0\n\r\n",
 			wantAuthenticated: true,
 		},
@@ -116,6 +116,7 @@ func TestSessionInfoRuntimeCounters(t *testing.T) {
 			LoadedChunks:    3,
 			DirtyChunks:     4,
 			Evictions:       5,
+			EvictionRuns:    9,
 			WALFlushes:      6,
 			OpenWALHandles:  8,
 			Checkpoints:     7,
@@ -131,9 +132,9 @@ func TestSessionInfoRuntimeCounters(t *testing.T) {
 		t,
 		session,
 		"INFO\r\n",
-		"$192\r\nregiondb_version=1\nprocess_lock_mode=flock\nchunk_lock_mode=shared-rwmutex\n"+
+		"$208\r\nregiondb_version=1\nprocess_lock_mode=flock\nchunk_lock_mode=shared-rwmutex\n"+
 			"cache_hits=1\ncache_misses=2\nloaded_chunks=3\n"+
-			"dirty_chunks=4\nevictions=5\nwal_flushes=6\n"+
+			"dirty_chunks=4\nevictions=5\neviction_runs=9\nwal_flushes=6\n"+
 			"open_wal_handles=8\ncheckpoints=7\n\r\n",
 	)
 }
@@ -258,9 +259,9 @@ func BenchmarkSessionCommands(b *testing.B) {
 		{
 			name:  "INFO",
 			frame: []byte("INFO\r\n"),
-			want: "$173\r\nregiondb_version=1\nprocess_lock_mode=\nchunk_lock_mode=\n" +
+			want: "$189\r\nregiondb_version=1\nprocess_lock_mode=\nchunk_lock_mode=\n" +
 				"cache_hits=0\ncache_misses=0\nloaded_chunks=0\n" +
-				"dirty_chunks=0\nevictions=0\nwal_flushes=0\n" +
+				"dirty_chunks=0\nevictions=0\neviction_runs=0\nwal_flushes=0\n" +
 				"open_wal_handles=0\ncheckpoints=0\n\r\n",
 		},
 		{name: "CHUNK_text", frame: []byte("CHUNK 2 -3\r\n"), want: "$4\r\n4104\r\n"},

@@ -43,6 +43,7 @@ func testIntegrationTCPCommandLifecycle(t *testing.T) {
 		"loaded_chunks=1\n",
 		"dirty_chunks=0\n",
 		"evictions=0\n",
+		"eviction_runs=0\n",
 		"wal_flushes=0\n",
 		"open_wal_handles=2\n",
 		"checkpoints=0\n",

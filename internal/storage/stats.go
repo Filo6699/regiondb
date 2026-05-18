@@ -1,8 +1,8 @@
 package storage
 
 // RuntimeStats is a bounded snapshot of the store's active lock modes and
-// activity since it was opened. LoadedChunks and DirtyChunks are gauges; the
-// remaining numeric fields are monotonic counters.
+// activity since it was opened. LoadedChunks, DirtyChunks, and OpenWALHandles
+// are gauges; the remaining numeric fields are monotonic counters.
 type RuntimeStats struct {
 	ProcessLockMode string
 	ChunkLockMode   string
@@ -11,6 +11,7 @@ type RuntimeStats struct {
 	LoadedChunks    uint64
 	DirtyChunks     uint64
 	Evictions       uint64
+	EvictionRuns    uint64
 	WALFlushes      uint64
 	OpenWALHandles  uint64
 	Checkpoints     uint64

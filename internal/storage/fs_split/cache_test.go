@@ -34,15 +34,23 @@ func TestChunkCacheSparseEvictionKeepsConstantFootprint(t *testing.T) {
 
 		residents := cache.loadedChunks()
 		cache.mu.Lock()
-		ordered := cache.recent.Len()
+		allocated := cache.recent.Len()
+		free := len(cache.free)
 		for _, element := range cache.entries {
 			buffers[&element.Value.(*cacheEntry).payload[0]] = struct{}{}
 			elements[element] = struct{}{}
 		}
 		cache.mu.Unlock()
 
-		if residents > max || ordered != residents {
-			t.Fatalf("write %d: residents = %d, recency entries = %d, want at most %d and equal", write, residents, ordered, max)
+		if residents > max || allocated != residents+free {
+			t.Fatalf(
+				"write %d: residents = %d, free = %d, allocated entries = %d, want at most %d residents and allocated = residents + free",
+				write,
+				residents,
+				free,
+				allocated,
+				max,
+			)
 		}
 	}
 
@@ -71,6 +79,48 @@ func TestChunkCacheSparseEvictionKeepsConstantFootprint(t *testing.T) {
 		if want := cachePayload(t, g, index); !bytes.Equal(chunk.Bytes(), want) {
 			t.Fatalf("get(%v) payload = %x, want %x", coord, chunk.Bytes(), want)
 		}
+	}
+}
+
+func TestChunkCacheEvictionHysteresisInvariants(t *testing.T) {
+	t.Parallel()
+
+	const high = 8
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 8})
+	cache := newChunkCache(g, high)
+	payload := cachePayload(t, g, 1)
+
+	for write := range high + 1 {
+		if err := cache.put(geometry.Coord{X: int64(write)}, payload); err != nil {
+			t.Fatalf("put(%d): %v", write, err)
+		}
+	}
+
+	stats := cache.runtimeStats()
+	if cache.low >= cache.high {
+		t.Fatalf("watermarks: low = %d, high = %d", cache.low, cache.high)
+	}
+	if got, want := cache.loadedChunks(), cache.low+1; got != want {
+		t.Fatalf("loaded chunks after high-water eviction = %d, want %d", got, want)
+	}
+	if stats.Evictions != uint64(cache.high-cache.low) {
+		t.Fatalf("evictions = %d, want high-low = %d", stats.Evictions, cache.high-cache.low)
+	}
+	if stats.EvictionRuns != 1 {
+		t.Fatalf("eviction runs = %d, want 1", stats.EvictionRuns)
+	}
+
+	for write := high + 1; cache.loadedChunks() < cache.high; write++ {
+		if err := cache.put(geometry.Coord{X: int64(write)}, payload); err != nil {
+			t.Fatalf("refill put(%d): %v", write, err)
+		}
+	}
+	refilled := cache.runtimeStats()
+	if refilled.Evictions != stats.Evictions || refilled.EvictionRuns != stats.EvictionRuns {
+		t.Fatalf("refill changed eviction counters: before=%+v after=%+v", stats, refilled)
+	}
+	if got := cache.loadedChunks(); got > cache.high {
+		t.Fatalf("loaded chunks = %d, want at most high watermark %d", got, cache.high)
 	}
 }
 
