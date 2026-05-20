@@ -28,6 +28,14 @@ const (
 	walCheckpointSynced    walBoundary = "checkpoint-synced"
 )
 
+type walFlushKind uint8
+
+const (
+	walForegroundFlush walFlushKind = iota
+	walGroupFlush
+	walCheckpointFlush
+)
+
 type walRecord struct {
 	coord   geometry.Coord
 	payload []byte
@@ -49,7 +57,11 @@ func (s *Store) appendWAL(record []byte) error {
 	if s.options.Durability == DurabilityFsyncWAL {
 		s.walUnsyncedUpdates++
 		if s.walUnsyncedUpdates >= s.options.WALGroupCommitUpdates {
-			if err := s.syncWAL(); err != nil {
+			kind := walGroupFlush
+			if s.options.WALGroupCommitUpdates == 1 {
+				kind = walForegroundFlush
+			}
+			if err := s.syncWAL(kind); err != nil {
 				return err
 			}
 		}
@@ -60,7 +72,7 @@ func (s *Store) appendWAL(record []byte) error {
 // syncWAL flushes a checked-out append handle. os.File.Sync maps to
 // FlushFileBuffers on Windows, which reports the write handle as durable
 // without closing it, so the pool can reuse the handle afterwards.
-func (s *Store) syncWAL() error {
+func (s *Store) syncWAL(kind walFlushKind) error {
 	wal, err := s.walHandles.acquire(walAppendHandle)
 	if err != nil {
 		return fmt.Errorf("acquire WAL append handle: %w", err)
@@ -73,9 +85,20 @@ func (s *Store) syncWAL() error {
 	if err := s.runWALFailpoint(walRecordSynced); err != nil {
 		return err
 	}
-	s.walFlushCount.Add(1)
+	s.recordWALFlush(kind)
 	s.walUnsyncedUpdates = 0
 	return nil
+}
+
+func (s *Store) recordWALFlush(kind walFlushKind) {
+	switch kind {
+	case walForegroundFlush:
+		s.walForegroundFlushes.Add(1)
+	case walGroupFlush:
+		s.walGroupFlushes.Add(1)
+	case walCheckpointFlush:
+		s.walCheckpointFlushes.Add(1)
+	}
 }
 
 func (s *Store) encodeWALRecord(coord geometry.Coord, payload []byte) []byte {
@@ -269,7 +292,7 @@ func (s *Store) clearWAL(syncData bool) error {
 		if err := s.runWALFailpoint(walCheckpointSynced); err != nil {
 			return err
 		}
-		s.walFlushCount.Add(1)
+		s.recordWALFlush(walCheckpointFlush)
 	}
 	s.walUnsyncedUpdates = 0
 	return nil

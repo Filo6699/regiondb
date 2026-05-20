@@ -37,6 +37,12 @@ func TestWindowsFileSyncPathsAreSupported(t *testing.T) {
 	if stats.WALFlushes != 2 {
 		t.Fatalf("WAL flushes = %d, want 2 (append handle and truncation)", stats.WALFlushes)
 	}
+	if stats.WALForegroundFlushes != 1 ||
+		stats.WALGroupFlushes != 0 ||
+		stats.WALEvictionFlushes != 0 ||
+		stats.WALCheckpointFlushes != 1 {
+		t.Fatalf("split WAL flush stats = %+v, want one foreground and one checkpoint flush", stats)
+	}
 	if stats.Checkpoints != 1 {
 		t.Fatalf("checkpoints = %d, want 1", stats.Checkpoints)
 	}

@@ -111,8 +111,13 @@ func TestCheckpointSyncCompletesBeforeWriteReturns(t *testing.T) {
 	if len(got) < len(wantSuffix) || !reflect.DeepEqual(got[len(got)-len(wantSuffix):], wantSuffix) {
 		t.Fatalf("final durability boundaries = %q, want suffix %q", got, wantSuffix)
 	}
-	if stats := store.RuntimeStats(); stats.Checkpoints != 1 || stats.WALFlushes != 1 {
-		t.Fatalf("stats after checkpoint = %+v, want one completed checkpoint and WAL flush", stats)
+	if stats := store.RuntimeStats(); stats.Checkpoints != 1 ||
+		stats.WALFlushes != 1 ||
+		stats.WALForegroundFlushes != 0 ||
+		stats.WALGroupFlushes != 0 ||
+		stats.WALEvictionFlushes != 0 ||
+		stats.WALCheckpointFlushes != 1 {
+		t.Fatalf("stats after checkpoint = %+v, want one completed checkpoint flush", stats)
 	}
 	closeStore(t, store)
 }

@@ -132,7 +132,7 @@ func (s *Session) Execute(command Command) Response {
 }
 
 func infoPayload(stats storage.RuntimeStats) []byte {
-	payload := make([]byte, 0, 256)
+	payload := make([]byte, 0, 384)
 	payload = append(payload, "regiondb_version=1\n"...)
 	payload = appendInfoValue(payload, "process_lock_mode", stats.ProcessLockMode)
 	payload = appendInfoValue(payload, "chunk_lock_mode", stats.ChunkLockMode)
@@ -143,6 +143,10 @@ func infoPayload(stats storage.RuntimeStats) []byte {
 	payload = appendInfoCounter(payload, "evictions", stats.Evictions)
 	payload = appendInfoCounter(payload, "eviction_runs", stats.EvictionRuns)
 	payload = appendInfoCounter(payload, "wal_flushes", stats.WALFlushes)
+	payload = appendInfoCounter(payload, "wal_foreground_flushes", stats.WALForegroundFlushes)
+	payload = appendInfoCounter(payload, "wal_group_flushes", stats.WALGroupFlushes)
+	payload = appendInfoCounter(payload, "wal_eviction_flushes", stats.WALEvictionFlushes)
+	payload = appendInfoCounter(payload, "wal_checkpoint_flushes", stats.WALCheckpointFlushes)
 	payload = appendInfoCounter(payload, "open_wal_handles", stats.OpenWALHandles)
 	return appendInfoCounter(payload, "checkpoints", stats.Checkpoints)
 }

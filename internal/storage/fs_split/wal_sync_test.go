@@ -33,8 +33,13 @@ func TestWALSyncFlushesWhileAppendHandleStaysOpen(t *testing.T) {
 		if err := store.WriteChunk(coord, chunk); err != nil {
 			t.Fatalf("WriteChunk(%d): %v", value, err)
 		}
-		if flushes := store.RuntimeStats().WALFlushes; flushes != uint64(update)+1 {
-			t.Fatalf("WAL flushes after %d updates = %d, want %d", update+1, flushes, update+1)
+		stats := store.RuntimeStats()
+		if stats.WALFlushes != uint64(update)+1 ||
+			stats.WALForegroundFlushes != uint64(update)+1 ||
+			stats.WALGroupFlushes != 0 ||
+			stats.WALEvictionFlushes != 0 ||
+			stats.WALCheckpointFlushes != 0 {
+			t.Fatalf("WAL flush stats after %d updates = %+v, want foreground-only flushes", update+1, stats)
 		}
 		// The store still owns the append handle; an independent reader must
 		// already observe every synchronized record.
@@ -87,8 +92,13 @@ func TestCloseSyncsWALWhileHandleIsStillOpen(t *testing.T) {
 
 	closeStore(t, store)
 
-	if flushes := store.RuntimeStats().WALFlushes; flushes != 1 {
-		t.Fatalf("WAL flushes after close = %d, want 1", flushes)
+	stats := store.RuntimeStats()
+	if stats.WALFlushes != 1 ||
+		stats.WALForegroundFlushes != 0 ||
+		stats.WALGroupFlushes != 1 ||
+		stats.WALEvictionFlushes != 0 ||
+		stats.WALCheckpointFlushes != 0 {
+		t.Fatalf("WAL flush stats after close = %+v, want one group flush", stats)
 	}
 	if err := handle.Sync(); !errors.Is(err, os.ErrClosed) {
 		t.Fatalf("sync of the closed WAL handle = %v, want %v", err, os.ErrClosed)

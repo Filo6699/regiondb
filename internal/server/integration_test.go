@@ -45,6 +45,10 @@ func testIntegrationTCPCommandLifecycle(t *testing.T) {
 		"evictions=0\n",
 		"eviction_runs=0\n",
 		"wal_flushes=0\n",
+		"wal_foreground_flushes=0\n",
+		"wal_group_flushes=0\n",
+		"wal_eviction_flushes=0\n",
+		"wal_checkpoint_flushes=0\n",
 		"open_wal_handles=2\n",
 		"checkpoints=0\n",
 	}

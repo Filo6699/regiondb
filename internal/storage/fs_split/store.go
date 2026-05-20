@@ -42,7 +42,9 @@ type Store struct {
 	walBytes             int64
 	walUnsyncedUpdates   uint64
 	walRecordBuffer      []byte
-	walFlushCount        atomic.Uint64
+	walForegroundFlushes atomic.Uint64
+	walGroupFlushes      atomic.Uint64
+	walCheckpointFlushes atomic.Uint64
 	checkpointCount      atomic.Uint64
 	closed               bool
 	atomicWriteFailpoint func(atomicWriteBoundary) error
@@ -71,7 +73,16 @@ func (s *Store) RuntimeStats() storage.RuntimeStats {
 	stats.ChunkLockMode = "shared-rwmutex"
 	// fs_split writes each chunk before admitting it to the cache, so it has
 	// no dirty resident state to report.
-	stats.WALFlushes = s.walFlushCount.Load()
+	stats.WALForegroundFlushes = s.walForegroundFlushes.Load()
+	stats.WALGroupFlushes = s.walGroupFlushes.Load()
+	// Cache entries are write-through and carry no pending WAL batch, so
+	// eviction never forces synchronization.
+	stats.WALEvictionFlushes = 0
+	stats.WALCheckpointFlushes = s.walCheckpointFlushes.Load()
+	stats.WALFlushes = stats.WALForegroundFlushes +
+		stats.WALGroupFlushes +
+		stats.WALEvictionFlushes +
+		stats.WALCheckpointFlushes
 	if s.walHandles != nil {
 		stats.OpenWALHandles = s.walHandles.stats().open
 	}
@@ -215,7 +226,7 @@ func (s *Store) Close() error {
 		// os.File.Sync rejects a closed file, so no platform offers a
 		// close-then-flush ordering.
 		if s.options.Durability == DurabilityFsyncWAL && s.walUnsyncedUpdates != 0 {
-			if err := s.syncWAL(); err != nil {
+			if err := s.syncWAL(walGroupFlush); err != nil {
 				result = errors.Join(result, err)
 			}
 		}

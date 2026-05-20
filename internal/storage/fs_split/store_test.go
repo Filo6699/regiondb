@@ -1015,6 +1015,17 @@ func TestStoreWALGroupCommitUsesUpdateBoundaries(t *testing.T) {
 					)
 				}
 			}
+			stats := store.RuntimeStats()
+			if groupSize == 1 {
+				if stats.WALForegroundFlushes != 3 || stats.WALGroupFlushes != 0 {
+					t.Fatalf("single-update flush stats = %+v, want three foreground flushes", stats)
+				}
+			} else if stats.WALForegroundFlushes != 0 || stats.WALGroupFlushes != 2 {
+				t.Fatalf("group size %d flush stats = %+v, want two group flushes", groupSize, stats)
+			}
+			if stats.WALEvictionFlushes != 0 || stats.WALCheckpointFlushes != 0 {
+				t.Fatalf("unrelated flush stats for group size %d = %+v", groupSize, stats)
+			}
 		})
 	}
 }
@@ -1164,19 +1175,25 @@ func TestStoreRuntimeStats(t *testing.T) {
 	}
 
 	want := storage.RuntimeStats{
-		ProcessLockMode: writerGuardMode(),
-		ChunkLockMode:   "shared-rwmutex",
-		CacheHits:       1,
-		CacheMisses:     1,
-		LoadedChunks:    1,
-		Evictions:       1,
-		EvictionRuns:    1,
-		WALFlushes:      3,
-		OpenWALHandles:  2,
-		Checkpoints:     1,
+		ProcessLockMode:      writerGuardMode(),
+		ChunkLockMode:        "shared-rwmutex",
+		CacheHits:            1,
+		CacheMisses:          1,
+		LoadedChunks:         1,
+		Evictions:            1,
+		EvictionRuns:         1,
+		WALFlushes:           3,
+		WALForegroundFlushes: 2,
+		WALCheckpointFlushes: 1,
+		OpenWALHandles:       2,
+		Checkpoints:          1,
 	}
-	if got := store.RuntimeStats(); got != want {
+	got := store.RuntimeStats()
+	if got != want {
 		t.Fatalf("RuntimeStats() = %+v, want %+v", got, want)
+	}
+	if got.WALEvictionFlushes != 0 {
+		t.Fatal("write-through cache eviction unexpectedly requires a WAL flush")
 	}
 }
 

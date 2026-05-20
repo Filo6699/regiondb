@@ -4,15 +4,19 @@ package storage
 // activity since it was opened. LoadedChunks, DirtyChunks, and OpenWALHandles
 // are gauges; the remaining numeric fields are monotonic counters.
 type RuntimeStats struct {
-	ProcessLockMode string
-	ChunkLockMode   string
-	CacheHits       uint64
-	CacheMisses     uint64
-	LoadedChunks    uint64
-	DirtyChunks     uint64
-	Evictions       uint64
-	EvictionRuns    uint64
-	WALFlushes      uint64
-	OpenWALHandles  uint64
-	Checkpoints     uint64
+	ProcessLockMode      string
+	ChunkLockMode        string
+	CacheHits            uint64
+	CacheMisses          uint64
+	LoadedChunks         uint64
+	DirtyChunks          uint64
+	Evictions            uint64
+	EvictionRuns         uint64
+	WALFlushes           uint64
+	WALForegroundFlushes uint64
+	WALGroupFlushes      uint64
+	WALEvictionFlushes   uint64
+	WALCheckpointFlushes uint64
+	OpenWALHandles       uint64
+	Checkpoints          uint64
 }
