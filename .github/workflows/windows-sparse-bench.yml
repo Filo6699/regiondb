@@ -72,24 +72,58 @@ jobs:
 
           try {
             $deadline = [DateTime]::UtcNow.AddSeconds(30)
-            $listenerReady = $false
+            $serverReady = $false
             while ([DateTime]::UtcNow -lt $deadline) {
               if ($server.HasExited) {
-                throw "regiondb exited before accepting connections with exit code $($server.ExitCode)"
+                throw "regiondb exited before becoming ready with exit code $($server.ExitCode)"
               }
               $client = [System.Net.Sockets.TcpClient]::new()
               try {
-                $client.Connect("127.0.0.1", 4242)
-                $listenerReady = $true
-                break
+                $connect = $client.ConnectAsync("127.0.0.1", 4242)
+                if (-not $connect.Wait(1000)) {
+                  throw "connection attempt timed out"
+                }
+                $client.SendTimeout = 1000
+                $client.ReceiveTimeout = 1000
+                $stream = $client.GetStream()
+                $stream.WriteTimeout = 1000
+                $stream.ReadTimeout = 1000
+                $writer = [System.IO.StreamWriter]::new(
+                  $stream,
+                  [System.Text.Encoding]::ASCII,
+                  1024,
+                  $true
+                )
+                $reader = [System.IO.StreamReader]::new(
+                  $stream,
+                  [System.Text.Encoding]::ASCII,
+                  $false,
+                  1024,
+                  $true
+                )
+                try {
+                  $writer.NewLine = "`r`n"
+                  $writer.WriteLine("AUTH $token")
+                  $writer.WriteLine("PING")
+                  $writer.Flush()
+                  $authResponse = $reader.ReadLine()
+                  $pingResponse = $reader.ReadLine()
+                  if ($authResponse -eq "+OK" -and $pingResponse -eq "+OK PONG") {
+                    $serverReady = $true
+                    break
+                  }
+                } finally {
+                  $reader.Dispose()
+                  $writer.Dispose()
+                }
               } catch {
                 Start-Sleep -Milliseconds 100
               } finally {
                 $client.Dispose()
               }
             }
-            if (-not $listenerReady) {
-              throw "regiondb did not accept connections before the readiness deadline"
+            if (-not $serverReady) {
+              throw "regiondb did not answer authenticated PING before the readiness deadline"
             }
 
             1..5 | ForEach-Object {
