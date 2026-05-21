@@ -1,0 +1,124 @@
+name: Windows sparse benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: Deterministic workload seed
+        required: true
+        default: "42"
+        type: string
+      operations:
+        description: Measured operation count per run
+        required: true
+        default: "10000"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  sparse-low-cache:
+    name: five sparse low-cache runs
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+        with:
+          go-version: "1.24.x"
+          cache: true
+          cache-dependency-path: go.mod
+
+      - name: Build server and benchmark
+        shell: pwsh
+        run: |
+          go build -trimpath -o regiondb.exe ./cmd/regiondb
+          if ($LASTEXITCODE -ne 0) {
+            throw "building regiondb failed with exit code $LASTEXITCODE"
+          }
+          go build -trimpath -o regiondb-bench.exe ./cmd/regiondb-bench
+          if ($LASTEXITCODE -ne 0) {
+            throw "building regiondb-bench failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Run five sparse low-cache benchmarks
+        shell: pwsh
+        env:
+          BENCHMARK_SEED: ${{ inputs.seed }}
+          BENCHMARK_OPERATIONS: ${{ inputs.operations }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $artifactDir = Join-Path $env:RUNNER_TEMP "regiondb-windows-sparse"
+          $dataDir = Join-Path $env:RUNNER_TEMP "regiondb-windows-sparse-data"
+          New-Item -ItemType Directory -Force -Path $artifactDir, $dataDir | Out-Null
+
+          $token = [guid]::NewGuid().ToString("N")
+          $serverArguments = @(
+            "-listen", "127.0.0.1:4242",
+            "-data-dir", $dataDir,
+            "-token", $token,
+            "-max-loaded-chunks", "1"
+          )
+          $server = Start-Process `
+            -FilePath ".\regiondb.exe" `
+            -ArgumentList $serverArguments `
+            -RedirectStandardOutput (Join-Path $artifactDir "server.stdout.log") `
+            -RedirectStandardError (Join-Path $artifactDir "server.stderr.log") `
+            -PassThru
+
+          try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(30)
+            $listenerReady = $false
+            while ([DateTime]::UtcNow -lt $deadline) {
+              if ($server.HasExited) {
+                throw "regiondb exited before accepting connections with exit code $($server.ExitCode)"
+              }
+              $client = [System.Net.Sockets.TcpClient]::new()
+              try {
+                $client.Connect("127.0.0.1", 4242)
+                $listenerReady = $true
+                break
+              } catch {
+                Start-Sleep -Milliseconds 100
+              } finally {
+                $client.Dispose()
+              }
+            }
+            if (-not $listenerReady) {
+              throw "regiondb did not accept connections before the readiness deadline"
+            }
+
+            1..5 | ForEach-Object {
+              $run = $_
+              $outputPath = Join-Path $artifactDir ("run-{0:D2}.json" -f $run)
+              $output = & .\regiondb-bench.exe `
+                -address "127.0.0.1:4242" `
+                -token $token `
+                -seed $env:BENCHMARK_SEED `
+                -ops $env:BENCHMARK_OPERATIONS `
+                -workload mixed 2>&1
+              $exitCode = $LASTEXITCODE
+              $output | Tee-Object -FilePath $outputPath
+              if ($exitCode -ne 0) {
+                throw "benchmark run $run failed with exit code $exitCode"
+              }
+            }
+          } finally {
+            if (-not $server.HasExited) {
+              Stop-Process -Id $server.Id -Force
+              $server.WaitForExit()
+            }
+          }
+
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-sparse-low-cache-${{ github.sha }}
+          path: ${{ runner.temp }}/regiondb-windows-sparse
+          if-no-files-found: error
+          retention-days: 30
