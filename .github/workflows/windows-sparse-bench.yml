@@ -129,16 +129,42 @@ jobs:
             1..5 | ForEach-Object {
               $run = $_
               $outputPath = Join-Path $artifactDir ("run-{0:D2}.json" -f $run)
-              $output = & .\regiondb-bench.exe `
-                -address "127.0.0.1:4242" `
-                -token $token `
-                -seed $env:BENCHMARK_SEED `
-                -ops $env:BENCHMARK_OPERATIONS `
-                -workload mixed 2>&1
-              $exitCode = $LASTEXITCODE
-              $output | Tee-Object -FilePath $outputPath
-              if ($exitCode -ne 0) {
-                throw "benchmark run $run failed with exit code $exitCode"
+              $attempt = 1
+              $maximumAttempts = 3
+              while ($true) {
+                $attemptPath = Join-Path $artifactDir (
+                  "run-{0:D2}-attempt-{1:D2}.log" -f $run, $attempt
+                )
+                $output = & .\regiondb-bench.exe `
+                  -address "127.0.0.1:4242" `
+                  -token $token `
+                  -seed $env:BENCHMARK_SEED `
+                  -ops $env:BENCHMARK_OPERATIONS `
+                  -workload mixed 2>&1
+                $exitCode = $LASTEXITCODE
+                $output | Tee-Object -FilePath $attemptPath
+                if ($exitCode -eq 0) {
+                  Copy-Item -Path $attemptPath -Destination $outputPath
+                  break
+                }
+
+                $outputText = $output | Out-String
+                $transientFailure = $outputText -match (
+                  "(?i)(i/o timeout|connection reset by peer|" +
+                  "forcibly closed by the remote host|" +
+                  "connection was aborted by the software in your host machine)"
+                )
+                if (-not $transientFailure -or $attempt -ge $maximumAttempts) {
+                  throw (
+                    "benchmark run $run failed with exit code $exitCode " +
+                    "after $attempt attempt(s)"
+                  )
+                }
+                Write-Warning (
+                  "benchmark run $run hit a classified transient network failure; " +
+                  "retrying attempt $($attempt + 1) of $maximumAttempts"
+                )
+                $attempt++
               }
             }
           } finally {
