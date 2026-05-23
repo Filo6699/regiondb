@@ -19,9 +19,13 @@ permissions:
 
 jobs:
   sparse-low-cache:
-    name: five sparse low-cache runs
+    name: sparse low-cache run ${{ matrix.run }}
     runs-on: windows-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [1, 2, 3, 4, 5]
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -45,20 +49,29 @@ jobs:
             throw "building regiondb-bench failed with exit code $LASTEXITCODE"
           }
 
-      - name: Run five sparse low-cache benchmarks
+      - name: Run sparse low-cache benchmark
         shell: pwsh
         env:
           BENCHMARK_SEED: ${{ inputs.seed }}
           BENCHMARK_OPERATIONS: ${{ inputs.operations }}
+          BENCHMARK_RUN: ${{ matrix.run }}
         run: |
           $ErrorActionPreference = "Stop"
-          $artifactDir = Join-Path $env:RUNNER_TEMP "regiondb-windows-sparse"
-          $dataDir = Join-Path $env:RUNNER_TEMP "regiondb-windows-sparse-data"
+          $run = [int]$env:BENCHMARK_RUN
+          $runLabel = "{0:D2}" -f $run
+          $port = 4241 + $run
+          $address = "127.0.0.1:$port"
+          $artifactDir = Join-Path $env:RUNNER_TEMP (
+            "regiondb-windows-sparse-run-$runLabel"
+          )
+          $dataDir = Join-Path $env:RUNNER_TEMP (
+            "regiondb-windows-sparse-data-run-$runLabel"
+          )
           New-Item -ItemType Directory -Force -Path $artifactDir, $dataDir | Out-Null
 
           $token = [guid]::NewGuid().ToString("N")
           $serverArguments = @(
-            "-listen", "127.0.0.1:4242",
+            "-listen", $address,
             "-data-dir", $dataDir,
             "-token", $token,
             "-max-loaded-chunks", "1"
@@ -79,7 +92,7 @@ jobs:
               }
               $client = [System.Net.Sockets.TcpClient]::new()
               try {
-                $connect = $client.ConnectAsync("127.0.0.1", 4242)
+                $connect = $client.ConnectAsync("127.0.0.1", $port)
                 if (-not $connect.Wait(1000)) {
                   throw "connection attempt timed out"
                 }
@@ -126,46 +139,43 @@ jobs:
               throw "regiondb did not answer authenticated PING before the readiness deadline"
             }
 
-            1..5 | ForEach-Object {
-              $run = $_
-              $outputPath = Join-Path $artifactDir ("run-{0:D2}.json" -f $run)
-              $attempt = 1
-              $maximumAttempts = 3
-              while ($true) {
-                $attemptPath = Join-Path $artifactDir (
-                  "run-{0:D2}-attempt-{1:D2}.log" -f $run, $attempt
-                )
-                $output = & .\regiondb-bench.exe `
-                  -address "127.0.0.1:4242" `
-                  -token $token `
-                  -seed $env:BENCHMARK_SEED `
-                  -ops $env:BENCHMARK_OPERATIONS `
-                  -workload mixed 2>&1
-                $exitCode = $LASTEXITCODE
-                $output | Tee-Object -FilePath $attemptPath
-                if ($exitCode -eq 0) {
-                  Copy-Item -Path $attemptPath -Destination $outputPath
-                  break
-                }
-
-                $outputText = $output | Out-String
-                $transientFailure = $outputText -match (
-                  "(?i)(i/o timeout|connection reset by peer|" +
-                  "forcibly closed by the remote host|" +
-                  "connection was aborted by the software in your host machine)"
-                )
-                if (-not $transientFailure -or $attempt -ge $maximumAttempts) {
-                  throw (
-                    "benchmark run $run failed with exit code $exitCode " +
-                    "after $attempt attempt(s)"
-                  )
-                }
-                Write-Warning (
-                  "benchmark run $run hit a classified transient network failure; " +
-                  "retrying attempt $($attempt + 1) of $maximumAttempts"
-                )
-                $attempt++
+            $outputPath = Join-Path $artifactDir "run-$runLabel.json"
+            $attempt = 1
+            $maximumAttempts = 3
+            while ($true) {
+              $attemptPath = Join-Path $artifactDir (
+                "run-{0}-attempt-{1:D2}.log" -f $runLabel, $attempt
+              )
+              $output = & .\regiondb-bench.exe `
+                -address $address `
+                -token $token `
+                -seed $env:BENCHMARK_SEED `
+                -ops $env:BENCHMARK_OPERATIONS `
+                -workload mixed 2>&1
+              $exitCode = $LASTEXITCODE
+              $output | Tee-Object -FilePath $attemptPath
+              if ($exitCode -eq 0) {
+                Copy-Item -Path $attemptPath -Destination $outputPath
+                break
               }
+
+              $outputText = $output | Out-String
+              $transientFailure = $outputText -match (
+                "(?i)(i/o timeout|connection reset by peer|" +
+                "forcibly closed by the remote host|" +
+                "connection was aborted by the software in your host machine)"
+              )
+              if (-not $transientFailure -or $attempt -ge $maximumAttempts) {
+                throw (
+                  "benchmark run $run failed with exit code $exitCode " +
+                  "after $attempt attempt(s)"
+                )
+              }
+              Write-Warning (
+                "benchmark run $run hit a classified transient network failure; " +
+                "retrying attempt $($attempt + 1) of $maximumAttempts"
+              )
+              $attempt++
             }
           } finally {
             if (-not $server.HasExited) {
@@ -178,7 +188,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: windows-sparse-low-cache-${{ github.sha }}
-          path: ${{ runner.temp }}/regiondb-windows-sparse
+          name: windows-sparse-low-cache-run-${{ matrix.run }}-${{ github.sha }}
+          path: ${{ runner.temp }}/regiondb-windows-sparse-run-*
           if-no-files-found: error
           retention-days: 30
