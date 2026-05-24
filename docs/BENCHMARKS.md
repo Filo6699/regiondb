@@ -106,6 +106,9 @@ evidence from a hosted Windows run. It does not provide throughput results.
 The [post-fix Windows cleanup snapshot](benchmarks/windows-post-fix-snapshot-2026-07-30.md)
 records the lock-mode metadata contract, deterministic benchmark teardown
 regression, and its explicit native-execution evidence boundary.
+The [sparse low-cache snapshot](benchmarks/sparse-low-cache-cross-platform-2026-07-30.md)
+preserves every repeated TCP result and reports the median together with the
+complete spread instead of selecting the best run.
 
 regiondb is specialized chunk/grid storage for games and grid-based
 simulations. These scenarios characterize only the implemented regular-chunk

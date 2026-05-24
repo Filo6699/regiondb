@@ -74,7 +74,10 @@ jobs:
             "-listen", $address,
             "-data-dir", $dataDir,
             "-token", $token,
-            "-max-loaded-chunks", "1"
+            "-max-loaded-chunks", "1",
+            "-chunk-edge", "16",
+            "-large-chunk-edge", "8",
+            "-block-bits", "5"
           )
           $server = Start-Process `
             -FilePath ".\regiondb.exe" `
@@ -151,7 +154,10 @@ jobs:
                 -token $token `
                 -seed $env:BENCHMARK_SEED `
                 -ops $env:BENCHMARK_OPERATIONS `
-                -workload mixed 2>&1
+                -workload mixed `
+                -chunk-edge 16 `
+                -large-chunk-edge 8 `
+                -block-bits 5 2>&1
               $exitCode = $LASTEXITCODE
               $output | Tee-Object -FilePath $attemptPath
               if ($exitCode -eq 0) {
