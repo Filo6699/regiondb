@@ -90,6 +90,15 @@ operation counts. Their results characterize the implemented regular-chunk
 paths on a particular configuration and machine; they are not general database
 performance claims or CI thresholds.
 
+With the server example above running, a short TCP benchmark can use its
+connection URI directly:
+
+```sh
+go run ./cmd/regiondb-bench \
+  -uri region://development-secret@127.0.0.1:4242/ \
+  -ops 1000
+```
+
 ## Development
 
 The project requires Go 1.24 or later.

@@ -63,8 +63,7 @@ func TestRunQuickTCPBenchmark(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	if err := run(context.Background(), []string{
-		"-address", listener.Addr().String(),
-		"-token", "secret",
+		"-uri", "region://secret@" + listener.Addr().String() + "/",
 		"-clients", "2",
 		"-seed", "23",
 		"-ops", "12",
@@ -122,6 +121,31 @@ func TestParseConfigUsesExternalServerByDefault(t *testing.T) {
 	}
 	if got.serverMode != serverModeExternal {
 		t.Fatalf("parseConfig() server mode = %q, want %q", got.serverMode, serverModeExternal)
+	}
+}
+
+func TestParseConfigAcceptsRegionURI(t *testing.T) {
+	t.Parallel()
+
+	got, err := parseConfig([]string{
+		"-uri", "regions://secret@example.com:8123/",
+	}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("parseConfig() error = %v", err)
+	}
+	if got.address != "example.com:8123" || got.token != "secret" || !got.tls {
+		t.Fatalf("parseConfig() endpoint = %+v", got)
+	}
+
+	for _, args := range [][]string{
+		{"-uri", "region://secret@example.com:8123/", "-address", "example.com:8123"},
+		{"-uri", "region://secret@example.com:8123/", "-token", "secret"},
+		{"-uri", "http://secret@example.com:8123/"},
+		{"-uri", "regions://secret@example.com:8123/", "-server-mode", "spawn"},
+	} {
+		if _, err := parseConfig(args, &bytes.Buffer{}); err == nil {
+			t.Fatalf("parseConfig(%q) succeeded", args)
+		}
 	}
 }
 

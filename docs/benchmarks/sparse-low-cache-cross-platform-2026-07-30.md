@@ -10,7 +10,7 @@ maximum spread; no run was selected or discarded based on throughput.
 
 | Setting | Value |
 |---|---|
-| Commit | `7ae725264abafa6ceeb823fd5bdcd34103a69e87` |
+| Benchmark implementation | `7ae725264abafa6ceeb823fd5bdcd34103a69e87` |
 | Seed | `42` |
 | Operations per run | `10,000` |
 | Workload | mixed: 7,962 reads and 2,038 writes |
@@ -71,6 +71,37 @@ All five JSON results are preserved in
 [`sparse-low-cache-linux-2026-07-30.jsonl`](sparse-low-cache-linux-2026-07-30.jsonl).
 The throughput spread is 8,885.52 operations per second, or 36.94% of the
 median. This variability is part of the evidence and is not filtered.
+
+## Windows measurement
+
+The five matrix jobs ran independently on GitHub-hosted Windows workers. The
+[workflow run](https://github.com/Filo6699/regiondb/actions/runs/30556105338)
+used commit `577764bcbab32d1b0667b55c49afc80c82a48ab3`; that commit only aligns the
+workflow's explicit geometry with the already measured benchmark
+implementation.
+
+| Field | Value |
+|---|---|
+| Operating system | Microsoft Windows Server 2025 Datacenter, 10.0.26100 |
+| Runner image | `windows-2025-vs2026`, version `20260714.173.1` |
+| Go | go1.24.13 windows/amd64 |
+| Process lock | `lock-file-ex` |
+| Chunk lock | `shared-rwmutex` |
+
+| Metric | Median | Full spread |
+|---|---:|---:|
+| Operations per second | 4,712.40 | 4,019.36–6,638.14 |
+| Duration | 2,122.06 ms | 1,506.45–2,487.96 ms |
+| Latency p50 | 0 us | 0–0 us |
+| Latency p95 | 683.40 us | 660.50–699.60 us |
+| Latency p99 | 809.00 us | 791.70–877.60 us |
+
+All five JSON results are preserved in
+[`sparse-low-cache-windows-2026-07-30.jsonl`](sparse-low-cache-windows-2026-07-30.jsonl).
+The throughput spread is 2,618.78 operations per second, or 55.57% of the
+median. Each job succeeded on its first attempt. The Windows clock reported
+zero-duration samples through p50 in every run, so those p50 values expose the
+available timer resolution rather than a claim of zero-cost operations.
 
 ## Interpretation boundary
 

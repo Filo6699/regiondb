@@ -24,11 +24,15 @@ existing chunks.
 
 The direct benchmark requires its own `-data-dir`. Its `-durability` setting
 selects one of the existing storage durability modes. The TCP benchmark uses
-an external server at `127.0.0.1:4242` by default and requires `-token`. Its
-geometry flags should match the server configuration; `chunk-edge` and
-`block-bits` determine the packed chunk payload length. `-clients` requests
-multiple authenticated connections; measured operations are distributed
-round-robin across the connections that were established successfully.
+an external server at `127.0.0.1:4242` by default and requires `-token`.
+Alternatively, `-uri` accepts a complete `region://token@host:port/` or
+`regions://token@host:port/` endpoint; it cannot be combined with `-address`
+or `-token`. A `regions://` endpoint uses TLS 1.2 or later and the operating
+system trust store. Its geometry flags should match the server configuration;
+`chunk-edge` and `block-bits` determine the packed chunk payload length.
+`-clients` requests multiple authenticated connections; measured operations
+are distributed round-robin across the connections that were established
+successfully.
 
 For example:
 
@@ -44,7 +48,7 @@ With a server listening on the default address:
 
 ```sh
 go run ./cmd/regiondb-bench \
-  -token development-secret \
+  -uri region://development-secret@127.0.0.1:4242/ \
   -seed 42 \
   -ops 1000 \
   -workload mixed

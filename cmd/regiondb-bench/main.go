@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -46,6 +47,7 @@ func main() {
 type config struct {
 	address      string
 	token        string
+	tls          bool
 	serverMode   serverMode
 	serverBinary string
 	clients      int
@@ -87,7 +89,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		if index == 0 && spawned != nil {
 			return dialBenchmarkClient(ctx, config, g, spawned)
 		}
-		return dialClient(ctx, config.address, config.token, g)
+		return dialClient(ctx, config.address, config.token, config.tls, g)
 	})
 	if err != nil {
 		return err
@@ -155,8 +157,10 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	var chunkEdge uint64
 	var largeChunkEdge uint64
 	var blockBits uint64
+	var rawURI string
 	flags.StringVar(&result.address, "address", server.DefaultAddress, "server TCP address in host:port form")
 	flags.StringVar(&result.token, "token", "", "server authentication token")
+	flags.StringVar(&rawURI, "uri", "", "server URI in region://token@host:port/ or regions:// form")
 	flags.Var(&result.serverMode, "server-mode", "server mode: external or spawn")
 	flags.StringVar(&result.serverBinary, "server-binary", "regiondb", "regiondb server binary used in spawn mode")
 	flags.IntVar(&result.clients, "clients", 1, "number of server connections")
@@ -172,6 +176,22 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	if flags.NArg() != 0 {
 		return config{}, errors.New("unexpected positional arguments")
 	}
+	provided := make(map[string]bool)
+	flags.Visit(func(flag *flag.Flag) {
+		provided[flag.Name] = true
+	})
+	if rawURI != "" {
+		if provided["address"] || provided["token"] {
+			return config{}, errors.New("-uri cannot be combined with -address or -token")
+		}
+		endpoint, err := server.ParseURI(rawURI)
+		if err != nil {
+			return config{}, err
+		}
+		result.address = endpoint.Address
+		result.token = endpoint.Token
+		result.tls = endpoint.TLS
+	}
 	if result.address == "" {
 		return config{}, errors.New("-address must not be empty")
 	}
@@ -186,6 +206,9 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	case serverModeSpawn:
 		if result.serverBinary == "" {
 			return config{}, errors.New("-server-binary must not be empty in spawn mode")
+		}
+		if result.tls {
+			return config{}, errors.New("regions:// cannot be used in spawn mode")
 		}
 	default:
 		return config{}, fmt.Errorf("unknown -server-mode %q", result.serverMode)
@@ -315,7 +338,7 @@ func dialBenchmarkClient(
 	spawned *spawnedServer,
 ) (*client, error) {
 	if spawned == nil {
-		return dialClient(ctx, config.address, config.token, g)
+		return dialClient(ctx, config.address, config.token, config.tls, g)
 	}
 	retry := time.NewTicker(10 * time.Millisecond)
 	defer retry.Stop()
@@ -323,7 +346,7 @@ func dialBenchmarkClient(
 	defer timeout.Stop()
 	var lastErr error
 	for {
-		result, err := dialClient(ctx, config.address, config.token, g)
+		result, err := dialClient(ctx, config.address, config.token, config.tls, g)
 		if err == nil {
 			return result, nil
 		}
@@ -348,8 +371,24 @@ type client struct {
 	payloadBytes int
 }
 
-func dialClient(ctx context.Context, address, token string, g geometry.Geometry) (*client, error) {
-	connection, err := (&net.Dialer{Timeout: networkTimeout}).DialContext(ctx, "tcp", address)
+func dialClient(
+	ctx context.Context,
+	address string,
+	token string,
+	useTLS bool,
+	g geometry.Geometry,
+) (*client, error) {
+	dialer := &net.Dialer{Timeout: networkTimeout}
+	var connection net.Conn
+	var err error
+	if useTLS {
+		connection, err = (&tls.Dialer{
+			NetDialer: dialer,
+			Config:    &tls.Config{MinVersion: tls.VersionTLS12},
+		}).DialContext(ctx, "tcp", address)
+	} else {
+		connection, err = dialer.DialContext(ctx, "tcp", address)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("connect to %q: %w", address, err)
 	}
