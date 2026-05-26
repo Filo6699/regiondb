@@ -34,12 +34,12 @@ jobs:
           cache: true
           cache-dependency-path: go.mod
 
-      - name: Run child-process crash suite
+      - name: Run crash suite
         shell: bash
         run: |
           set -euo pipefail
-          go test ./internal/storage/fs_split \
-            -run '^TestCrash' \
+          go test ./... \
+            -run Crash \
             -count=1 \
             -v \
             2>&1 | tee "$RUNNER_TEMP/durability-crash.log"

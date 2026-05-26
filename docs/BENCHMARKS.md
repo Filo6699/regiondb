@@ -93,7 +93,9 @@ direct result includes the store method call but not chunk construction.
 Benchmark values depend on geometry, durability, cache state, filesystem,
 hardware, operating system, and server configuration. Quick benchmark tests
 only prove that the scenarios complete and emit valid output; they do not
-enforce performance thresholds.
+enforce performance thresholds. The reproducible benchmark workflow runs those
+quick tests before collecting its bundle. Full integration, stress, and crash
+suites remain in their dedicated validation gates.
 
 The [measured baseline](benchmarks/measured-baseline-2026-07-30.md) records a
 specific local environment, command, commit, and raw artifact. It is suitable

@@ -57,9 +57,11 @@ jobs:
           cache: true
           cache-dependency-path: go.mod
 
-      - name: Run full release gate
-        if: github.event_name == 'release'
-        run: scripts/test/full.sh
+      - name: Run benchmark smoke tests
+        run: |
+          go test -run '^TestRunQuick.*Benchmark$' \
+            ./cmd/regiondb-direct-bench \
+            ./cmd/regiondb-bench
 
       - name: Build benchmark
         run: go build -trimpath -o benchmark-runner ./cmd/regiondb-direct-bench

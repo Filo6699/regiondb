@@ -113,7 +113,10 @@ scripts/test/quick.sh
 The quick gate runs vet, tests, and builds and is used by the pull-request CI
 matrix. `scripts/test/full.sh` adds the race detector, uncached tests, and the
 existing integration, crash, and repeated stress suites; release automation
-runs that full gate. Neither gate applies a benchmark throughput threshold.
+runs that full gate. The reproducible benchmark workflow runs the benchmark
+smoke tests before collecting artifacts; full stress and crash suites stay in
+their dedicated gates. None of these gates applies a benchmark throughput
+threshold.
 
 ## License
 
