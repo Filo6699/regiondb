@@ -42,6 +42,7 @@ type config struct {
 	checkpointRecords     uint64
 	checkpointBytes       int64
 	maxLoadedChunks       int
+	maxOpenWALStreams     int
 	walGroupCommitUpdates uint64
 	workers               int
 	acceptQueue           int
@@ -77,6 +78,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnEr
 		CheckpointRecords:     config.checkpointRecords,
 		CheckpointBytes:       config.checkpointBytes,
 		MaxLoadedChunks:       config.maxLoadedChunks,
+		MaxOpenWALHandles:     config.maxOpenWALStreams,
 		WALGroupCommitUpdates: config.walGroupCommitUpdates,
 	})
 	if err != nil {
@@ -169,6 +171,12 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	flags.Uint64Var(&result.checkpointRecords, "checkpoint-records", fs_split.DefaultCheckpointRecords, "WAL records between checkpoints")
 	flags.Int64Var(&result.checkpointBytes, "checkpoint-bytes", fs_split.DefaultCheckpointBytes, "WAL bytes between checkpoints")
 	flags.IntVar(&result.maxLoadedChunks, "max-loaded-chunks", fs_split.DefaultMaxLoadedChunks, "maximum chunks retained in memory")
+	flags.IntVar(
+		&result.maxOpenWALStreams,
+		"max-open-wal-streams",
+		fs_split.DefaultMaxOpenWALHandles,
+		"maximum cached WAL streams before the OS descriptor clamp",
+	)
 	flags.Uint64Var(
 		&result.walGroupCommitUpdates,
 		"wal-group-commit-updates",
@@ -218,6 +226,9 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	}
 	if result.maxLoadedChunks <= 0 {
 		return config{}, errors.New("-max-loaded-chunks must be positive")
+	}
+	if result.maxOpenWALStreams <= 0 {
+		return config{}, errors.New("-max-open-wal-streams must be positive")
 	}
 	if result.walGroupCommitUpdates == 0 {
 		return config{}, errors.New("-wal-group-commit-updates must be positive")

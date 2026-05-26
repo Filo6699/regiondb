@@ -23,10 +23,11 @@ go run ./cmd/regiondb \
 Storage defaults to `relaxed` durability. Operators can select `fsync-wal` or
 `fsync-checkpoint` and tune WAL checkpoint thresholds with
 `-checkpoint-records` and `-checkpoint-bytes`. `-max-loaded-chunks` bounds the
-in-memory LRU cache. `-workers`, `-accept-queue`, and `-max-line-bytes` bound
-connection processing, queued accepted connections, and command lines. The
-exact acknowledgement boundaries are defined in the storage format
-specification.
+in-memory LRU cache. `-max-open-wal-streams` bounds cached WAL file streams and
+is lowered automatically when the operating-system descriptor budget is
+smaller. `-workers`, `-accept-queue`, and `-max-line-bytes` bound connection
+processing, queued accepted connections, and command lines. The exact
+acknowledgement boundaries are defined in the storage format specification.
 
 The server listens on `127.0.0.1:4242` by default. Use `-listen` to select a
 different interface or port.
@@ -40,6 +41,7 @@ The server defaults are:
 | `-checkpoint-records` | `1024` |
 | `-checkpoint-bytes` | `67108864` (64 MiB) |
 | `-max-loaded-chunks` | `1024` |
+| `-max-open-wal-streams` | `2` |
 | `-wal-group-commit-updates` | `1` |
 | `-workers` | current `GOMAXPROCS` |
 | `-accept-queue` | `128` |

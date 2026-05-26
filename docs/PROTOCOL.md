@@ -90,7 +90,7 @@ The fields have these meanings:
 | `wal_group_flushes` | counter | WAL synchronizations performed at a group-commit boundary or for a pending group during clean shutdown. |
 | `wal_eviction_flushes` | counter | WAL synchronizations forced by cache eviction; always zero for the write-through `fs_split_v1` cache. |
 | `wal_checkpoint_flushes` | counter | WAL synchronizations that commit checkpoint or recovery truncation. |
-| `open_wal_handles` | gauge | Current cached WAL append and scan handles; never above the storage limit, which defaults to two. |
+| `open_wal_handles` | gauge | Current cached WAL append and scan handles; never above `-max-open-wal-streams` or the lower operating-system descriptor budget. |
 | `checkpoints` | counter | Completed WAL checkpoints since the store opened. |
 
 Counters are monotonic for one store lifetime and reset when the process

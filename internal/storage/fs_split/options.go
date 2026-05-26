@@ -61,6 +61,10 @@ func (options Options) validated() (Options, error) {
 	if options.MaxOpenWALHandles < 0 {
 		return Options{}, errors.New("maximum open WAL handles must be positive")
 	}
+	options.MaxOpenWALHandles = clampWALStreamLimit(
+		options.MaxOpenWALHandles,
+		walDescriptorBudget(),
+	)
 	if options.WALGroupCommitUpdates == 0 {
 		options.WALGroupCommitUpdates = DefaultWALGroupCommitUpdates
 	}

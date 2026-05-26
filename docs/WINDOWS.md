@@ -70,6 +70,10 @@ required. Windows does not expose the same parent-directory synchronization
 operation as Unix, so the precise guarantees and limitations are defined in
 the [storage format](STORAGE_FORMAT.md).
 
+`-max-open-wal-streams` defaults to two. Windows has no `RLIMIT_NOFILE`
+equivalent, so larger values are conservatively clamped to 64 cached WAL
+handles, leaving headroom for non-WAL and runtime-owned handles.
+
 Do not place an active data directory on a network share or in a directory
 synchronized by another program. Filesystems and filter drivers can provide
 weaker locking, replacement, or persistence behavior than a local NTFS
