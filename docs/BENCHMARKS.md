@@ -48,7 +48,7 @@ With a server listening on the default address:
 
 ```sh
 go run ./cmd/regiondb-bench \
-  -uri region://development-secret@127.0.0.1:4242/ \
+  -uri region://region-token@127.0.0.1:4242/ \
   -seed 42 \
   -ops 1000 \
   -workload mixed
@@ -63,7 +63,7 @@ go build -o ./regiondb ./cmd/regiondb
 go run ./cmd/regiondb-bench \
   -server-mode spawn \
   -server-binary ./regiondb \
-  -token development-secret \
+  -token region-token \
   -seed 42 \
   -ops 1000 \
   -workload mixed

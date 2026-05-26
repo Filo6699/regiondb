@@ -39,7 +39,7 @@ Choose a data directory and a non-empty authentication token:
 New-Item -ItemType Directory -Force .\data | Out-Null
 .\bin\regiondb.exe `
   -data-dir .\data `
-  -token development-secret `
+  -token region-token `
   -chunk-edge 16 `
   -large-chunk-edge 8 `
   -block-bits 5 `

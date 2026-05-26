@@ -13,7 +13,7 @@ All geometry and authentication settings are explicit:
 ```sh
 go run ./cmd/regiondb \
   -data-dir ./data \
-  -token development-secret \
+  -token region-token \
   -chunk-edge 16 \
   -large-chunk-edge 8 \
   -block-bits 5 \
@@ -55,7 +55,7 @@ To enable TLS, provide both files from a PEM certificate/key pair:
 ```sh
 go run ./cmd/regiondb \
   -data-dir ./data \
-  -token development-secret \
+  -token region-token \
   -chunk-edge 16 \
   -large-chunk-edge 8 \
   -block-bits 5 \
@@ -80,7 +80,10 @@ The current contracts are documented in:
 - [Scenario benchmarks](docs/BENCHMARKS.md)
 - [Docker](docs/DOCKER.md)
 - [Windows guide](docs/WINDOWS.md)
-- [Release notes](docs/releases/v0.1.1-alpha.md)
+- [Release notes](docs/releases/v0.1.1-preview.md)
+
+The `preview` label identifies the current prerelease channel. The
+implementation remains at engineering-alpha maturity.
 
 ## Scenario benchmarks
 
@@ -95,7 +98,7 @@ connection URI directly:
 
 ```sh
 go run ./cmd/regiondb-bench \
-  -uri region://development-secret@127.0.0.1:4242/ \
+  -uri region://region-token@127.0.0.1:4242/ \
   -ops 1000
 ```
 
