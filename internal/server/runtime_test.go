@@ -3,6 +3,8 @@ package server
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -106,7 +108,7 @@ func TestServePreservesPartialLinesAndMalformedBoundaries(t *testing.T) {
 	serveDone := make(chan struct{})
 	go func() {
 		defer close(serveDone)
-		serveConnection(serverConnection, engine, 64)
+		serveConnection(context.Background(), serverConnection, engine, 64)
 		_ = serverConnection.Close()
 	}()
 
@@ -376,6 +378,175 @@ func TestServeLifecycleLogging(t *testing.T) {
 	}
 }
 
+func TestServeLogsClassifiedConnectionTermination(t *testing.T) {
+	t.Parallel()
+
+	engine := newTestEngine(t)
+	listener := newCountingListener()
+	sink := newRecordingSink()
+	logger := logging.NewWithSink(sink, time.Now)
+	ctx, cancel := context.WithCancel(context.Background())
+	serveResult := make(chan error, 1)
+	go func() {
+		serveResult <- ServeWithOptions(ctx, listener, engine, Options{
+			Workers:      1,
+			AcceptQueue:  1,
+			MaxLineBytes: 64,
+			Logger:       logger,
+		})
+	}()
+
+	if started := sink.next(t); started.Message != "serve_started" {
+		cancel()
+		t.Fatalf("start event = %q, want %q", started.Message, "serve_started")
+	}
+	waitForAccept(t, listener, 1)
+	serverConnection, clientConnection := net.Pipe()
+	t.Cleanup(func() { _ = clientConnection.Close() })
+	if err := serverConnection.SetReadDeadline(time.Now().Add(-time.Second)); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	listener.connections <- serverConnection
+
+	terminated := sink.next(t)
+	if got, want := terminated.Message, "connection_terminated"; got != want {
+		cancel()
+		t.Fatalf("termination event = %q, want %q", got, want)
+	}
+	if got, want := terminated.Level, slog.LevelWarn; got != want {
+		cancel()
+		t.Fatalf("termination level = %v, want %v", got, want)
+	}
+	attributes := recordAttributes(terminated)
+	if got, want := attributes["phase"], "read"; got != want {
+		cancel()
+		t.Fatalf("termination phase = %q, want %q", got, want)
+	}
+	if got, want := attributes["reason"], string(terminationTimeout); got != want {
+		cancel()
+		t.Fatalf("termination reason = %q, want %q", got, want)
+	}
+
+	cancel()
+	if err := <-serveResult; err != nil {
+		t.Fatalf("ServeWithOptions() error = %v", err)
+	}
+	if stopped := sink.next(t); stopped.Message != "serve_stopped" {
+		t.Fatalf("stop event = %q, want %q", stopped.Message, "serve_stopped")
+	}
+}
+
+func TestConnectionTerminationReasonClasses(t *testing.T) {
+	t.Parallel()
+
+	serverConnection, clientConnection := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConnection.Close()
+		_ = clientConnection.Close()
+	})
+	tlsConnection := tls.Server(serverConnection, &tls.Config{MinVersion: tls.VersionTLS12})
+	shutdownContext, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tests := []struct {
+		name        string
+		ctx         context.Context
+		connection  net.Conn
+		err         error
+		logPeer     bool
+		wantReason  terminationReason
+		wantLogging bool
+	}{
+		{
+			name:       "server shutdown",
+			ctx:        shutdownContext,
+			connection: serverConnection,
+			err:        errors.New("closed by shutdown"),
+			wantReason: terminationServerShutdown,
+		},
+		{
+			name:        "timeout",
+			ctx:         context.Background(),
+			connection:  serverConnection,
+			err:         timeoutTestError{},
+			wantReason:  terminationTimeout,
+			wantLogging: true,
+		},
+		{
+			name:       "clean peer close",
+			ctx:        context.Background(),
+			connection: serverConnection,
+			err:        io.EOF,
+			wantReason: terminationPeerClose,
+		},
+		{
+			name:        "reset peer close",
+			ctx:         context.Background(),
+			connection:  serverConnection,
+			err:         io.ErrClosedPipe,
+			logPeer:     true,
+			wantReason:  terminationPeerClose,
+			wantLogging: true,
+		},
+		{
+			name:        "TLS error",
+			ctx:         context.Background(),
+			connection:  tlsConnection,
+			err:         errors.New("handshake failed"),
+			wantReason:  terminationTLSError,
+			wantLogging: true,
+		},
+		{
+			name:        "socket error",
+			ctx:         context.Background(),
+			connection:  serverConnection,
+			err:         errors.New("I/O failed"),
+			wantReason:  terminationSocketError,
+			wantLogging: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			termination := classifyConnectionTermination(
+				test.ctx,
+				test.connection,
+				"read",
+				test.err,
+				test.logPeer,
+			)
+			if termination.reason != test.wantReason {
+				t.Fatalf("reason = %q, want %q", termination.reason, test.wantReason)
+			}
+			if termination.shouldLog != test.wantLogging {
+				t.Fatalf("shouldLog = %t, want %t", termination.shouldLog, test.wantLogging)
+			}
+		})
+	}
+}
+
+func TestCleanPeerCloseDoesNotLogTermination(t *testing.T) {
+	t.Parallel()
+
+	engine := newTestEngine(t)
+	serverConnection, clientConnection := net.Pipe()
+	closed := make(chan struct{})
+	go func() {
+		_ = clientConnection.Close()
+		close(closed)
+	}()
+	termination := serveConnection(context.Background(), serverConnection, engine, 64)
+	_ = serverConnection.Close()
+	<-closed
+
+	if termination.reason != terminationPeerClose {
+		t.Fatalf("termination reason = %q, want %q", termination.reason, terminationPeerClose)
+	}
+	if termination.shouldLog {
+		t.Fatal("clean peer close was marked for warning logging")
+	}
+}
+
 func TestServeOptionsValidation(t *testing.T) {
 	t.Parallel()
 
@@ -569,3 +740,18 @@ func (s *recordingSink) records() []slog.Record {
 		}
 	}
 }
+
+func recordAttributes(record slog.Record) map[string]string {
+	attributes := make(map[string]string)
+	record.Attrs(func(attribute slog.Attr) bool {
+		attributes[attribute.Key] = attribute.Value.String()
+		return true
+	})
+	return attributes
+}
+
+type timeoutTestError struct{}
+
+func (timeoutTestError) Error() string   { return "I/O timeout" }
+func (timeoutTestError) Timeout() bool   { return true }
+func (timeoutTestError) Temporary() bool { return true }

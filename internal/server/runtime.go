@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -29,6 +30,24 @@ type Options struct {
 	AcceptQueue  int
 	MaxLineBytes int
 	Logger       *logging.Logger
+}
+
+type terminationReason string
+
+const (
+	terminationPeerClose      terminationReason = "peer_close"
+	terminationProtocolClose  terminationReason = "protocol_close"
+	terminationServerShutdown terminationReason = "server_shutdown"
+	terminationSocketError    terminationReason = "socket_error"
+	terminationTLSError       terminationReason = "tls_error"
+	terminationTimeout        terminationReason = "timeout"
+)
+
+type connectionTermination struct {
+	phase     string
+	reason    terminationReason
+	err       error
+	shouldLog bool
 }
 
 func DefaultOptions() Options {
@@ -121,7 +140,13 @@ func ServeWithOptions(
 						<-slots
 						return
 					}
-					serveConnection(connection, engine, options.MaxLineBytes)
+					termination := serveConnection(
+						serveCtx,
+						connection,
+						engine,
+						options.MaxLineBytes,
+					)
+					logConnectionTermination(options.Logger, termination)
 					connections.Delete(connection)
 					_ = connection.Close()
 					<-slots
@@ -169,7 +194,18 @@ func ServeWithOptions(
 			waitForWorkers()
 			return nil
 		default:
-			_ = rejectOverloadedConnection(connection)
+			if err := rejectOverloadedConnection(connection); err != nil {
+				logConnectionTermination(
+					options.Logger,
+					classifyConnectionTermination(
+						serveCtx,
+						connection,
+						"busy_response",
+						err,
+						true,
+					),
+				)
+			}
 			_ = connection.Close()
 			connections.Delete(connection)
 		}
@@ -186,9 +222,14 @@ func rejectOverloadedConnection(connection net.Conn) error {
 	return nil
 }
 
-func serveConnection(connection net.Conn, engine *protocol.Engine, maxLineBytes int) {
+func serveConnection(
+	ctx context.Context,
+	connection net.Conn,
+	engine *protocol.Engine,
+	maxLineBytes int,
+) connectionTermination {
 	if err := setNoDelay(connection); err != nil {
-		return
+		return classifyConnectionTermination(ctx, connection, "setup", err, true)
 	}
 	reader := newLineBuffer(maxLineBytes)
 	writer := bufio.NewWriter(connection)
@@ -197,29 +238,102 @@ func serveConnection(connection net.Conn, engine *protocol.Engine, maxLineBytes 
 		frame, tooLong, err := reader.readFrame(connection)
 		if tooLong {
 			if writeErr := writeResponse(writer, []byte("-ERR FRAME command exceeds max_line_bytes\r\n")); writeErr != nil {
-				return
+				return classifyConnectionTermination(ctx, connection, "write", writeErr, true)
 			}
 			if err != nil {
-				return
+				return classifyConnectionTermination(ctx, connection, "read", err, false)
 			}
 			continue
 		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
-				return
+				return classifyConnectionTermination(ctx, connection, "read", err, true)
 			}
 			if len(frame) == 0 {
-				return
+				return classifyConnectionTermination(ctx, connection, "read", err, false)
 			}
 		}
 
 		if err := writeResponse(writer, session.Handle(frame).Bytes()); err != nil {
-			return
+			return classifyConnectionTermination(ctx, connection, "write", err, true)
 		}
-		if session.Closed() || errors.Is(err, io.EOF) {
-			return
+		if session.Closed() {
+			return connectionTermination{
+				phase:  "protocol",
+				reason: terminationProtocolClose,
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			return classifyConnectionTermination(ctx, connection, "read", err, false)
 		}
 	}
+}
+
+func classifyConnectionTermination(
+	ctx context.Context,
+	connection net.Conn,
+	phase string,
+	err error,
+	logPeerClose bool,
+) connectionTermination {
+	termination := connectionTermination{
+		phase:     phase,
+		err:       err,
+		shouldLog: true,
+	}
+	if ctx != nil && ctx.Err() != nil {
+		termination.reason = terminationServerShutdown
+		termination.shouldLog = false
+		return termination
+	}
+	var networkError net.Error
+	if errors.As(err, &networkError) && networkError.Timeout() {
+		termination.reason = terminationTimeout
+		return termination
+	}
+	if errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrClosedPipe) ||
+		errors.Is(err, net.ErrClosed) ||
+		isPeerCloseError(err) {
+		termination.reason = terminationPeerClose
+		termination.shouldLog = logPeerClose
+		return termination
+	}
+	if isTLSConnection(connection) {
+		termination.reason = terminationTLSError
+		return termination
+	}
+	termination.reason = terminationSocketError
+	return termination
+}
+
+func isTLSConnection(connection net.Conn) bool {
+	for {
+		if _, ok := connection.(*tls.Conn); ok {
+			return true
+		}
+		wrapped, ok := connection.(interface {
+			NetConn() net.Conn
+		})
+		if !ok {
+			return false
+		}
+		connection = wrapped.NetConn()
+	}
+}
+
+func logConnectionTermination(logger *logging.Logger, termination connectionTermination) {
+	if logger == nil || !termination.shouldLog {
+		return
+	}
+	attributes := []slog.Attr{
+		slog.String("phase", termination.phase),
+		slog.String("reason", string(termination.reason)),
+	}
+	if termination.err != nil {
+		attributes = append(attributes, slog.String("error", termination.err.Error()))
+	}
+	logger.Warn("server", "connection_terminated", attributes...)
 }
 
 func setNoDelay(connection net.Conn) error {

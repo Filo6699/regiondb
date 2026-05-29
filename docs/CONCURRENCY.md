@@ -16,6 +16,12 @@ Cancelling the server context closes the listener plus active and queued
 connections, then waits for all workers to return. Workers, queue capacity, and
 the maximum command line size are server startup settings.
 
+Abnormal connection setup, read, and write termination emits a warning with a
+stable `phase` and `reason`. Reason classes are `timeout`, `peer_close`,
+`socket_error`, `tls_error`, `protocol_close`, and `server_shutdown`. Clean EOF,
+`QUIT`, and server shutdown are classified but do not emit termination
+warnings.
+
 ## In-process storage access
 
 The protocol engine uses one read/write mutex for all commands sharing that
