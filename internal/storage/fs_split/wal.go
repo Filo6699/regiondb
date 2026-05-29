@@ -69,6 +69,17 @@ func (s *Store) appendWAL(record []byte) error {
 	return nil
 }
 
+func writeWALRecord(writer io.Writer, record []byte) error {
+	written, err := writer.Write(record)
+	if err != nil {
+		return fmt.Errorf("append WAL: %w", err)
+	}
+	if written != len(record) {
+		return fmt.Errorf("append WAL: wrote %d of %d bytes: %w", written, len(record), io.ErrShortWrite)
+	}
+	return nil
+}
+
 // syncWAL flushes a checked-out append handle. os.File.Sync maps to
 // FlushFileBuffers on Windows, which reports the write handle as durable
 // without closing it, so the pool can reuse the handle afterwards.

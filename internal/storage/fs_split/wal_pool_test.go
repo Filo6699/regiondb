@@ -2,11 +2,13 @@ package fs_split
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Filo6699/regiondb/internal/geometry"
 )
@@ -154,6 +156,44 @@ func TestWALHandlePoolCloseWaitsForLeases(t *testing.T) {
 	}
 }
 
+func TestWALHandlePoolCapacityWaitIsBounded(t *testing.T) {
+	t.Parallel()
+
+	appendHandle, err := openWAL(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := newWALHandlePool(appendHandle.Name(), 1, appendHandle)
+	pool.waitTimeout = 50 * time.Millisecond
+	t.Cleanup(func() {
+		if err := pool.close(); err != nil {
+			t.Errorf("close pool: %v", err)
+		}
+	})
+
+	if _, err := pool.acquire(walAppendHandle); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.acquire(walScanHandle); !errors.Is(err, errWALHandlePoolBusy) {
+		t.Fatalf("acquire at capacity error = %v, want %v", err, errWALHandlePoolBusy)
+	}
+	pool.release(walAppendHandle)
+
+	if _, err := pool.acquire(walScanHandle); err != nil {
+		t.Fatalf("acquire after release: %v", err)
+	}
+	pool.release(walScanHandle)
+}
+
+func TestWriteWALRecordPropagatesShortWrite(t *testing.T) {
+	t.Parallel()
+
+	err := writeWALRecord(shortWALWriter{}, []byte("record"))
+	if !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("writeWALRecord() error = %v, want %v", err, io.ErrShortWrite)
+	}
+}
+
 func TestWALHandlePoolConcurrentAcquireAndEvict(t *testing.T) {
 	t.Parallel()
 
@@ -190,4 +230,10 @@ func TestWALHandlePoolConcurrentAcquireAndEvict(t *testing.T) {
 	if err := pool.close(); err != nil {
 		t.Fatalf("close pool: %v", err)
 	}
+}
+
+type shortWALWriter struct{}
+
+func (shortWALWriter) Write(data []byte) (int, error) {
+	return len(data) - 1, nil
 }

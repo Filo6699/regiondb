@@ -17,8 +17,5 @@ func appendWALHandle(wal *os.File, record []byte) error {
 	if _, err := wal.Seek(0, io.SeekEnd); err != nil {
 		return fmt.Errorf("seek WAL end: %w", err)
 	}
-	if _, err := wal.Write(record); err != nil {
-		return fmt.Errorf("append WAL: %w", err)
-	}
-	return nil
+	return writeWALRecord(wal, record)
 }

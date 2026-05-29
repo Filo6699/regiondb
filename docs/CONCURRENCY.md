@@ -5,9 +5,11 @@ This document describes regiondb's concurrency behavior.
 ## Server ownership
 
 One `Serve` call owns one listener and a fixed-size worker pool. Accepted
-connections wait in a bounded queue; the accept loop stops accepting while all
-workers and queue slots are occupied. Each worker handles one connection at a
-time, so a slow client cannot create an unbounded number of goroutines.
+connections wait in a bounded queue. When all workers and queue slots are
+occupied, the accept loop sends a best-effort `BUSY` response under a short
+write deadline and closes the extra connection. Each worker handles one
+connection at a time, so a slow client cannot create an unbounded number of
+goroutines.
 Connections retain independent authentication and close state.
 
 Cancelling the server context closes the listener plus active and queued

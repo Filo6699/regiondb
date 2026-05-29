@@ -196,7 +196,7 @@ func TestServeRejectsOversizedLineAndContinues(t *testing.T) {
 	}
 }
 
-func TestServeBoundsAcceptedConnections(t *testing.T) {
+func TestServeRejectsConnectionsBeyondBoundedQueue(t *testing.T) {
 	t.Parallel()
 
 	engine := newTestEngine(t)
@@ -211,24 +211,43 @@ func TestServeBoundsAcceptedConnections(t *testing.T) {
 		})
 	}()
 
-	clients := make([]net.Conn, 0, 2)
-	for wantAccepts := 1; wantAccepts <= 2; wantAccepts++ {
-		select {
-		case got := <-listener.accepted:
-			if got != wantAccepts {
-				cancel()
-				t.Fatalf("Accept() calls = %d, want %d", got, wantAccepts)
-			}
-		case <-time.After(5 * time.Second):
-			cancel()
-			t.Fatalf("timed out waiting for Accept() call %d", wantAccepts)
-		}
-		serverConnection, clientConnection := net.Pipe()
-		clients = append(clients, clientConnection)
-		listener.connections <- serverConnection
+	firstServer, firstClient := net.Pipe()
+	firstReadStarted := make(chan struct{})
+	waitForAccept(t, listener, 1)
+	listener.connections <- &readObservedConnection{
+		Conn:    firstServer,
+		started: firstReadStarted,
+	}
+	select {
+	case <-firstReadStarted:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("timed out waiting for the first worker to become occupied")
+	}
+
+	secondServer, secondClient := net.Pipe()
+	waitForAccept(t, listener, 2)
+	listener.connections <- secondServer
+
+	rejectedServer, rejectedClient := net.Pipe()
+	waitForAccept(t, listener, 3)
+	listener.connections <- rejectedServer
+
+	if err := rejectedClient.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	response, err := bufio.NewReader(rejectedClient).ReadString('\n')
+	if err != nil {
+		cancel()
+		t.Fatalf("read overload response: %v", err)
+	}
+	if want := "-ERR BUSY server overloaded\r\n"; response != want {
+		cancel()
+		t.Fatalf("overload response = %q, want %q", response, want)
 	}
 	t.Cleanup(func() {
-		for _, connection := range clients {
+		for _, connection := range []net.Conn{firstClient, secondClient, rejectedClient} {
 			_ = connection.Close()
 		}
 	})
@@ -237,13 +256,31 @@ func TestServeBoundsAcceptedConnections(t *testing.T) {
 	if err := <-serveResult; err != nil {
 		t.Fatalf("ServeWithOptions() error = %v", err)
 	}
-	if got := listener.accepts.Load(); got != 2 {
-		t.Fatalf("Accept() calls = %d, want 2 for one worker and one queued connection", got)
+	if got := listener.accepts.Load(); got < 3 {
+		t.Fatalf("Accept() calls = %d, want at least 3", got)
 	}
-	for index, connection := range clients {
+	for index, connection := range []net.Conn{firstClient, secondClient} {
 		if _, err := connection.Write([]byte("PING\r\n")); err == nil {
 			t.Fatalf("connection %d remained open after cancellation", index)
 		}
+	}
+}
+
+func TestOverloadResponseWriteHasDeadline(t *testing.T) {
+	t.Parallel()
+
+	serverConnection, clientConnection := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConnection.Close()
+		_ = clientConnection.Close()
+	})
+
+	started := time.Now()
+	if err := rejectOverloadedConnection(serverConnection); err == nil {
+		t.Fatal("rejectOverloadedConnection() succeeded without a reader")
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("overload response blocked for %v, want at most 2s", elapsed)
 	}
 }
 
@@ -439,6 +476,32 @@ type testAddress string
 
 func (a testAddress) Network() string { return string(a) }
 func (a testAddress) String() string  { return string(a) }
+
+type readObservedConnection struct {
+	net.Conn
+	started chan struct{}
+	once    sync.Once
+}
+
+func (c *readObservedConnection) Read(destination []byte) (int, error) {
+	c.once.Do(func() {
+		close(c.started)
+	})
+	return c.Conn.Read(destination)
+}
+
+func waitForAccept(t *testing.T, listener *countingListener, want int) {
+	t.Helper()
+
+	select {
+	case got := <-listener.accepted:
+		if got != want {
+			t.Fatalf("Accept() calls = %d, want %d", got, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for Accept() call %d", want)
+	}
+}
 
 type repeatingReader struct {
 	data   []byte

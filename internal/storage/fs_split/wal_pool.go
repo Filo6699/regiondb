@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 )
 
 type walHandleKind uint8
@@ -15,7 +16,12 @@ const (
 	walScanHandle
 )
 
-var errWALHandlePoolClosed = errors.New("WAL handle pool is closed")
+var (
+	errWALHandlePoolClosed = errors.New("WAL handle pool is closed")
+	errWALHandlePoolBusy   = errors.New("WAL handle pool capacity wait timed out")
+)
+
+const walHandleAcquireTimeout = time.Second
 
 type walHandleEntry struct {
 	kind   walHandleKind
@@ -37,24 +43,26 @@ type walHandlePool struct {
 	maxOpen    int
 	openHandle func(string, walHandleKind) (*os.File, error)
 
-	mu        sync.Mutex
-	available *sync.Cond
-	handles   map[walHandleKind]*walHandleEntry
-	recent    *list.List
-	active    int
-	opens     uint64
-	evictions uint64
-	closed    bool
-	closeErr  error
+	mu          sync.Mutex
+	available   *sync.Cond
+	handles     map[walHandleKind]*walHandleEntry
+	recent      *list.List
+	active      int
+	opens       uint64
+	evictions   uint64
+	closed      bool
+	closeErr    error
+	waitTimeout time.Duration
 }
 
 func newWALHandlePool(path string, maxOpen int, appendHandle *os.File) *walHandlePool {
 	pool := &walHandlePool{
-		path:       path,
-		maxOpen:    maxOpen,
-		openHandle: openPooledWALHandle,
-		handles:    make(map[walHandleKind]*walHandleEntry),
-		recent:     list.New(),
+		path:        path,
+		maxOpen:     maxOpen,
+		openHandle:  openPooledWALHandle,
+		handles:     make(map[walHandleKind]*walHandleEntry),
+		recent:      list.New(),
+		waitTimeout: walHandleAcquireTimeout,
 	}
 	pool.available = sync.NewCond(&pool.mu)
 	if appendHandle != nil {
@@ -80,6 +88,14 @@ func openPooledWALHandle(path string, kind walHandleKind) (*os.File, error) {
 func (pool *walHandlePool) acquire(kind walHandleKind) (*os.File, error) {
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
+
+	var deadline time.Time
+	var wakeAtDeadline *time.Timer
+	defer func() {
+		if wakeAtDeadline != nil {
+			wakeAtDeadline.Stop()
+		}
+	}()
 
 	for {
 		if pool.closed {
@@ -109,6 +125,17 @@ func (pool *walHandlePool) acquire(kind walHandleKind) (*os.File, error) {
 		}
 		if evicted {
 			continue
+		}
+		if wakeAtDeadline == nil {
+			deadline = time.Now().Add(pool.waitTimeout)
+			wakeAtDeadline = time.AfterFunc(pool.waitTimeout, func() {
+				pool.mu.Lock()
+				pool.available.Broadcast()
+				pool.mu.Unlock()
+			})
+		}
+		if !time.Now().Before(deadline) {
+			return nil, errWALHandlePoolBusy
 		}
 		pool.available.Wait()
 	}

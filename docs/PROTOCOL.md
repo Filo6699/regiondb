@@ -9,6 +9,11 @@ A server accepts TCP connections. Plaintext endpoints use
 `region://token@host:port/`; TLS endpoints use
 `regions://token@host:port/` and require TLS 1.2 or later.
 
+When the bounded server queue is full, a newly accepted connection may receive
+`-ERR BUSY server overloaded` and close before processing a command. The
+response is best effort and bounded by a short write deadline, so an overloaded
+or non-reading peer may observe only the connection close.
+
 Each connection owns an independent authentication session. A request is one
 printable ASCII command line terminated by CRLF. Command names use uppercase
 ASCII. Tokens are separated by exactly one space. Empty tokens, embedded line

@@ -112,6 +112,46 @@ func TestCrashSyncedWALSurvivesRestart(t *testing.T) {
 	assertNoChunkTemporaryFiles(t, root)
 }
 
+func TestWALSyncFailurePropagatesAndRecoversAfterReopen(t *testing.T) {
+	t.Parallel()
+
+	root := testTempDir(t)
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 8})
+	options := walRestartCrashOptions()
+	store := mustOpenWithOptions(t, root, g, options)
+	chunk := mustChunk(t, g)
+	if err := chunk.Set(geometry.Offset{}, 73); err != nil {
+		t.Fatal(err)
+	}
+
+	injected := errors.New("injected WAL sync result failure")
+	store.walFailpoint = func(boundary walBoundary) error {
+		if boundary == walRecordSynced {
+			return injected
+		}
+		return nil
+	}
+	if err := store.WriteChunk(walRestartCrashCoord, chunk); !errors.Is(err, injected) {
+		t.Fatalf("WriteChunk() error = %v, want %v", err, injected)
+	}
+	store.walFailpoint = nil
+	closeStore(t, store)
+
+	reopened := mustOpenWithOptions(t, root, g, options)
+	recovered, err := reopened.ReadChunk(walRestartCrashCoord)
+	if err != nil {
+		t.Fatalf("ReadChunk() after WAL failure restart: %v", err)
+	}
+	value, err := recovered.Get(geometry.Offset{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != 73 {
+		t.Fatalf("recovered value = %d, want 73", value)
+	}
+	closeStore(t, reopened)
+}
+
 func runWALRestartCrashChild(t *testing.T) {
 	root := os.Getenv("REGIONDB_WAL_RESTART_CRASH_ROOT")
 	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 8})

@@ -11,15 +11,17 @@ import (
 	"net"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/Filo6699/regiondb/internal/logging"
 	"github.com/Filo6699/regiondb/internal/protocol"
 )
 
 const (
-	DefaultAddress      = "127.0.0.1:4242"
-	DefaultAcceptQueue  = 128
-	DefaultMaxLineBytes = 1 << 20
+	DefaultAddress       = "127.0.0.1:4242"
+	DefaultAcceptQueue   = 128
+	DefaultMaxLineBytes  = 1 << 20
+	overloadWriteTimeout = 100 * time.Millisecond
 )
 
 type Options struct {
@@ -101,8 +103,9 @@ func ServeWithOptions(
 		workers.Wait()
 	}
 
-	queue := make(chan net.Conn, options.AcceptQueue)
-	slots := make(chan struct{}, options.Workers+options.AcceptQueue)
+	capacity := options.Workers + options.AcceptQueue
+	queue := make(chan net.Conn, capacity)
+	slots := make(chan struct{}, capacity)
 	workers.Add(options.Workers)
 	for range options.Workers {
 		go func() {
@@ -128,16 +131,8 @@ func ServeWithOptions(
 	}
 
 	for {
-		select {
-		case slots <- struct{}{}:
-		case <-serveCtx.Done():
-			waitForWorkers()
-			return nil
-		}
-
 		connection, err := listener.Accept()
 		if err != nil {
-			<-slots
 			if serveCtx.Err() != nil {
 				waitForWorkers()
 				return nil
@@ -154,20 +149,41 @@ func ServeWithOptions(
 		if serveCtx.Err() != nil {
 			_ = connection.Close()
 			connections.Delete(connection)
-			<-slots
 			waitForWorkers()
 			return nil
 		}
 		select {
-		case queue <- connection:
+		case slots <- struct{}{}:
+			select {
+			case queue <- connection:
+			case <-serveCtx.Done():
+				_ = connection.Close()
+				connections.Delete(connection)
+				<-slots
+				waitForWorkers()
+				return nil
+			}
 		case <-serveCtx.Done():
 			_ = connection.Close()
 			connections.Delete(connection)
-			<-slots
 			waitForWorkers()
 			return nil
+		default:
+			_ = rejectOverloadedConnection(connection)
+			_ = connection.Close()
+			connections.Delete(connection)
 		}
 	}
+}
+
+func rejectOverloadedConnection(connection net.Conn) error {
+	if err := connection.SetWriteDeadline(time.Now().Add(overloadWriteTimeout)); err != nil {
+		return fmt.Errorf("set overload response deadline: %w", err)
+	}
+	if err := writeAll(connection, []byte("-ERR BUSY server overloaded\r\n")); err != nil {
+		return fmt.Errorf("write overload response: %w", err)
+	}
+	return nil
 }
 
 func serveConnection(connection net.Conn, engine *protocol.Engine, maxLineBytes int) {

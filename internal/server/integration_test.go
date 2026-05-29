@@ -8,6 +8,7 @@ import (
 	"net"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 func TestIntegrationTCP(t *testing.T) {
 	t.Run("command lifecycle", testIntegrationTCPCommandLifecycle)
 	t.Run("concurrent clients", testIntegrationTCPConcurrentClients)
+	t.Run("overload response", testIntegrationTCPOverloadResponse)
 }
 
 func testIntegrationTCPCommandLifecycle(t *testing.T) {
@@ -153,6 +155,70 @@ func testIntegrationTCPConcurrentClients(t *testing.T) {
 	}
 }
 
+func testIntegrationTCPOverloadResponse(t *testing.T) {
+	g, err := geometry.New(geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := fs_split.Open(t.TempDir(), g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := protocol.NewEngine(g, store, "secret")
+	if err != nil {
+		_ = store.Close()
+		t.Fatal(err)
+	}
+	tcpListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		_ = store.Close()
+		t.Fatal(err)
+	}
+	listener := &integrationObservedListener{
+		Listener:    tcpListener,
+		accepted:    make(chan int, 3),
+		readStarted: make(chan int, 1),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	serveResult := make(chan error, 1)
+	go func() {
+		serveResult <- ServeWithOptions(ctx, listener, engine, Options{
+			Workers:      1,
+			AcceptQueue:  1,
+			MaxLineBytes: DefaultMaxLineBytes,
+		})
+	}()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-serveResult; err != nil {
+			t.Errorf("ServeWithOptions() error = %v", err)
+		}
+		if err := store.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+
+	first := dialIntegrationServer(t, listener.Addr())
+	t.Cleanup(func() { _ = first.Close() })
+	waitForIntegrationSignal(t, listener.accepted, 1, "first accept")
+	waitForIntegrationSignal(t, listener.readStarted, 1, "first worker read")
+
+	second := dialIntegrationServer(t, listener.Addr())
+	t.Cleanup(func() { _ = second.Close() })
+	waitForIntegrationSignal(t, listener.accepted, 2, "second accept")
+
+	rejected := dialIntegrationServer(t, listener.Addr())
+	t.Cleanup(func() { _ = rejected.Close() })
+	waitForIntegrationSignal(t, listener.accepted, 3, "third accept")
+	response, err := bufio.NewReader(rejected).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read overload response: %v", err)
+	}
+	if want := "-ERR BUSY server overloaded\r\n"; response != want {
+		t.Fatalf("overload response = %q, want %q", response, want)
+	}
+}
+
 func startIntegrationServer(t *testing.T, options Options) net.Addr {
 	t.Helper()
 
@@ -204,4 +270,50 @@ func dialIntegrationServer(t *testing.T, address net.Addr) net.Conn {
 		t.Fatal(err)
 	}
 	return connection
+}
+
+type integrationObservedListener struct {
+	net.Listener
+	accepted    chan int
+	readStarted chan int
+	accepts     atomic.Int32
+}
+
+func (l *integrationObservedListener) Accept() (net.Conn, error) {
+	connection, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	accepted := int(l.accepts.Add(1))
+	l.accepted <- accepted
+	return &integrationObservedConnection{
+		Conn: connection,
+		onRead: func() {
+			l.readStarted <- accepted
+		},
+	}, nil
+}
+
+type integrationObservedConnection struct {
+	net.Conn
+	once   sync.Once
+	onRead func()
+}
+
+func (c *integrationObservedConnection) Read(destination []byte) (int, error) {
+	c.once.Do(c.onRead)
+	return c.Conn.Read(destination)
+}
+
+func waitForIntegrationSignal(t *testing.T, signals <-chan int, want int, description string) {
+	t.Helper()
+
+	select {
+	case got := <-signals:
+		if got != want {
+			t.Fatalf("%s = %d, want %d", description, got, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", description)
+	}
 }
