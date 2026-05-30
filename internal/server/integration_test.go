@@ -21,6 +21,28 @@ func TestIntegrationTCP(t *testing.T) {
 	t.Run("command lifecycle", testIntegrationTCPCommandLifecycle)
 	t.Run("concurrent clients", testIntegrationTCPConcurrentClients)
 	t.Run("overload response", testIntegrationTCPOverloadResponse)
+	t.Run("request deadline", testIntegrationTCPRequestDeadline)
+}
+
+func testIntegrationTCPRequestDeadline(t *testing.T) {
+	address := startIntegrationServer(t, Options{
+		Workers:         1,
+		AcceptQueue:     1,
+		MaxLineBytes:    DefaultMaxLineBytes,
+		IdleTimeout:     time.Second,
+		RequestTimeout:  100 * time.Millisecond,
+		ResponseTimeout: time.Second,
+	})
+	connection := dialIntegrationServer(t, address)
+	defer func() {
+		_ = connection.Close()
+	}()
+	if _, err := connection.Write([]byte("P")); err != nil {
+		t.Fatalf("write partial request: %v", err)
+	}
+	if _, err := connection.Read(make([]byte, 1)); err == nil {
+		t.Fatal("partial request remained open past its deadline")
+	}
 }
 
 func testIntegrationTCPCommandLifecycle(t *testing.T) {

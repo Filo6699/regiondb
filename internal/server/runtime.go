@@ -19,19 +19,23 @@ import (
 )
 
 const (
-	DefaultAddress       = "127.0.0.1:4242"
-	DefaultAcceptQueue   = 128
-	DefaultMaxLineBytes  = 1 << 20
-	DefaultIdleTimeout   = 30 * time.Second
-	overloadWriteTimeout = 100 * time.Millisecond
+	DefaultAddress         = "127.0.0.1:4242"
+	DefaultAcceptQueue     = 128
+	DefaultMaxLineBytes    = 1 << 20
+	DefaultIdleTimeout     = 30 * time.Second
+	DefaultRequestTimeout  = 10 * time.Second
+	DefaultResponseTimeout = 10 * time.Second
+	overloadWriteTimeout   = 100 * time.Millisecond
 )
 
 type Options struct {
-	Workers      int
-	AcceptQueue  int
-	MaxLineBytes int
-	IdleTimeout  time.Duration
-	Logger       *logging.Logger
+	Workers         int
+	AcceptQueue     int
+	MaxLineBytes    int
+	IdleTimeout     time.Duration
+	RequestTimeout  time.Duration
+	ResponseTimeout time.Duration
+	Logger          *logging.Logger
 }
 
 type terminationReason string
@@ -54,10 +58,12 @@ type connectionTermination struct {
 
 func DefaultOptions() Options {
 	return Options{
-		Workers:      runtime.GOMAXPROCS(0),
-		AcceptQueue:  DefaultAcceptQueue,
-		MaxLineBytes: DefaultMaxLineBytes,
-		IdleTimeout:  DefaultIdleTimeout,
+		Workers:         runtime.GOMAXPROCS(0),
+		AcceptQueue:     DefaultAcceptQueue,
+		MaxLineBytes:    DefaultMaxLineBytes,
+		IdleTimeout:     DefaultIdleTimeout,
+		RequestTimeout:  DefaultRequestTimeout,
+		ResponseTimeout: DefaultResponseTimeout,
 	}
 }
 
@@ -101,6 +107,18 @@ func ServeWithOptions(
 	}
 	if options.IdleTimeout == 0 {
 		options.IdleTimeout = DefaultIdleTimeout
+	}
+	if options.RequestTimeout < 0 {
+		return errors.New("serve: request timeout must not be negative")
+	}
+	if options.RequestTimeout == 0 {
+		options.RequestTimeout = DefaultRequestTimeout
+	}
+	if options.ResponseTimeout < 0 {
+		return errors.New("serve: response timeout must not be negative")
+	}
+	if options.ResponseTimeout == 0 {
+		options.ResponseTimeout = DefaultResponseTimeout
 	}
 
 	serveCtx, cancel := context.WithCancel(ctx)
@@ -155,6 +173,8 @@ func ServeWithOptions(
 						engine,
 						options.MaxLineBytes,
 						options.IdleTimeout,
+						options.RequestTimeout,
+						options.ResponseTimeout,
 					)
 					logConnectionTermination(options.Logger, termination)
 					connections.Delete(connection)
@@ -238,6 +258,8 @@ func serveConnection(
 	engine *protocol.Engine,
 	maxLineBytes int,
 	idleTimeout time.Duration,
+	requestTimeout time.Duration,
+	responseTimeout time.Duration,
 ) connectionTermination {
 	if err := setNoDelay(connection); err != nil {
 		return classifyConnectionTermination(ctx, connection, "setup", err, true)
@@ -246,12 +268,18 @@ func serveConnection(
 	writer := bufio.NewWriter(connection)
 	session := engine.NewSession()
 	for {
-		if err := connection.SetReadDeadline(time.Now().Add(idleTimeout)); err != nil {
-			return classifyConnectionTermination(ctx, connection, "read", err, true)
-		}
-		frame, tooLong, err := reader.readFrame(connection)
+		frame, tooLong, err := reader.readFrameWithin(
+			connection,
+			idleTimeout,
+			requestTimeout,
+		)
 		if tooLong {
-			if writeErr := writeResponse(writer, []byte("-ERR FRAME command exceeds max_line_bytes\r\n")); writeErr != nil {
+			if writeErr := writeResponseWithin(
+				connection,
+				writer,
+				[]byte("-ERR FRAME command exceeds max_line_bytes\r\n"),
+				responseTimeout,
+			); writeErr != nil {
 				return classifyConnectionTermination(ctx, connection, "write", writeErr, true)
 			}
 			if err != nil {
@@ -268,7 +296,12 @@ func serveConnection(
 			}
 		}
 
-		if err := writeResponse(writer, session.Handle(frame).Bytes()); err != nil {
+		if err := writeResponseWithin(
+			connection,
+			writer,
+			session.Handle(frame).Bytes(),
+			responseTimeout,
+		); err != nil {
 			return classifyConnectionTermination(ctx, connection, "write", err, true)
 		}
 		if session.Closed() {
@@ -415,6 +448,39 @@ func (b *lineBuffer) readFrame(reader io.Reader) ([]byte, bool, error) {
 	}
 }
 
+func (b *lineBuffer) readFrameWithin(
+	connection net.Conn,
+	idleTimeout time.Duration,
+	requestTimeout time.Duration,
+) ([]byte, bool, error) {
+	if b.start != b.end || b.pendingErr != nil {
+		if err := connection.SetReadDeadline(time.Now().Add(requestTimeout)); err != nil {
+			return nil, false, err
+		}
+		return b.readFrame(connection)
+	}
+	if err := connection.SetReadDeadline(time.Now().Add(idleTimeout)); err != nil {
+		return nil, false, err
+	}
+
+	read, err := connection.Read(b.data)
+	b.end = read
+	if read != 0 {
+		if deadlineErr := connection.SetReadDeadline(
+			time.Now().Add(requestTimeout),
+		); deadlineErr != nil {
+			return nil, false, deadlineErr
+		}
+	}
+	if err != nil {
+		b.pendingErr = err
+	}
+	if read == 0 && err == nil {
+		return nil, false, io.ErrNoProgress
+	}
+	return b.readFrame(connection)
+}
+
 func (b *lineBuffer) discardOversized(reader io.Reader) ([]byte, bool, error) {
 	b.start = 0
 	b.end = 0
@@ -461,6 +527,18 @@ func writeResponse(writer *bufio.Writer, data []byte) error {
 		return err
 	}
 	return writer.Flush()
+}
+
+func writeResponseWithin(
+	connection net.Conn,
+	writer *bufio.Writer,
+	data []byte,
+	responseTimeout time.Duration,
+) error {
+	if err := connection.SetWriteDeadline(time.Now().Add(responseTimeout)); err != nil {
+		return err
+	}
+	return writeResponse(writer, data)
 }
 
 func writeAll(writer io.Writer, data []byte) error {

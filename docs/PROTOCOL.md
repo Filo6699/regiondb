@@ -18,7 +18,9 @@ Each connection owns an independent authentication session. A request is one
 printable ASCII command line terminated by CRLF. Command names use uppercase
 ASCII. Tokens are separated by exactly one space. Empty tokens, embedded line
 breaks, other control bytes, and an unterminated final line are rejected as
-frame errors.
+frame errors. Idle reads, complete request frames, and response drains have
+separate absolute deadlines. Sending request bytes incrementally does not
+extend the request deadline.
 
 `AUTH` and `QUIT` may be sent before authentication. Every other command
 returns `NOAUTH` until authentication succeeds. A failed `AUTH` clears any

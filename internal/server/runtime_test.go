@@ -108,7 +108,15 @@ func TestServePreservesPartialLinesAndMalformedBoundaries(t *testing.T) {
 	serveDone := make(chan struct{})
 	go func() {
 		defer close(serveDone)
-		serveConnection(context.Background(), serverConnection, engine, 64, DefaultIdleTimeout)
+		serveConnection(
+			context.Background(),
+			serverConnection,
+			engine,
+			64,
+			DefaultIdleTimeout,
+			DefaultRequestTimeout,
+			DefaultResponseTimeout,
+		)
 		_ = serverConnection.Close()
 	}()
 
@@ -395,6 +403,100 @@ func TestIdleDeadlineReleasesWorker(t *testing.T) {
 	}
 }
 
+func TestRequestDeadlineIsAbsoluteForTrickleClient(t *testing.T) {
+	t.Parallel()
+
+	engine := newTestEngine(t)
+	serverConnection, clientConnection := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConnection.Close()
+		_ = clientConnection.Close()
+	})
+
+	serveDone := make(chan connectionTermination, 1)
+	go func() {
+		defer func() { _ = serverConnection.Close() }()
+		serveDone <- serveConnection(
+			context.Background(),
+			serverConnection,
+			engine,
+			64,
+			time.Second,
+			150*time.Millisecond,
+			time.Second,
+		)
+	}()
+
+	if _, err := clientConnection.Write([]byte("P")); err != nil {
+		t.Fatal(err)
+	}
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	overall := time.NewTimer(2 * time.Second)
+	defer overall.Stop()
+	writes := 1
+	for {
+		select {
+		case termination := <-serveDone:
+			if termination.phase != "read" || termination.reason != terminationTimeout {
+				t.Fatalf("termination = %+v, want read timeout", termination)
+			}
+			if writes < 2 {
+				t.Fatal("request timed out before the trickle remained active")
+			}
+			return
+		case <-ticker.C:
+			if _, err := clientConnection.Write([]byte("P")); err != nil {
+				termination := <-serveDone
+				if termination.phase != "read" || termination.reason != terminationTimeout {
+					t.Fatalf("termination = %+v, want read timeout", termination)
+				}
+				return
+			}
+			writes++
+		case <-overall.C:
+			t.Fatal("trickle client extended the request phase")
+		}
+	}
+}
+
+func TestResponseDeadlineBoundsDrain(t *testing.T) {
+	t.Parallel()
+
+	engine := newTestEngine(t)
+	serverConnection, clientConnection := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConnection.Close()
+		_ = clientConnection.Close()
+	})
+
+	serveDone := make(chan connectionTermination, 1)
+	go func() {
+		defer func() { _ = serverConnection.Close() }()
+		serveDone <- serveConnection(
+			context.Background(),
+			serverConnection,
+			engine,
+			64,
+			time.Second,
+			time.Second,
+			100*time.Millisecond,
+		)
+	}()
+	if _, err := io.WriteString(clientConnection, "PING\r\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case termination := <-serveDone:
+		if termination.phase != "write" || termination.reason != terminationTimeout {
+			t.Fatalf("termination = %+v, want write timeout", termination)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("response drain remained blocked")
+	}
+}
+
 func TestServeLifecycleLogging(t *testing.T) {
 	t.Parallel()
 
@@ -597,6 +699,8 @@ func TestCleanPeerCloseDoesNotLogTermination(t *testing.T) {
 		engine,
 		64,
 		DefaultIdleTimeout,
+		DefaultRequestTimeout,
+		DefaultResponseTimeout,
 	)
 	_ = serverConnection.Close()
 	<-closed
@@ -618,6 +722,8 @@ func TestServeOptionsValidation(t *testing.T) {
 		{Workers: 1, AcceptQueue: -1, MaxLineBytes: 1},
 		{Workers: 1, AcceptQueue: 1, MaxLineBytes: 0},
 		{Workers: 1, AcceptQueue: 1, MaxLineBytes: 1, IdleTimeout: -time.Second},
+		{Workers: 1, AcceptQueue: 1, MaxLineBytes: 1, RequestTimeout: -time.Second},
+		{Workers: 1, AcceptQueue: 1, MaxLineBytes: 1, ResponseTimeout: -time.Second},
 	}
 	for _, options := range tests {
 		listener := newCountingListener()

@@ -10,7 +10,9 @@ occupied, the accept loop sends a best-effort `BUSY` response under a short
 write deadline and closes the extra connection. Each worker handles one
 connection at a time, so a slow client cannot create an unbounded number of
 goroutines. An idle connection has a fixed read deadline and releases its
-worker when it sends no request.
+worker when it sends no request. Once the first request byte arrives, a
+separate absolute deadline bounds the complete frame; receiving additional
+bytes does not extend it. Response draining has its own absolute deadline.
 Connections retain independent authentication and close state.
 
 Cancelling the server context closes the listener plus active and queued
