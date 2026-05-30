@@ -22,6 +22,7 @@ const (
 	DefaultAddress       = "127.0.0.1:4242"
 	DefaultAcceptQueue   = 128
 	DefaultMaxLineBytes  = 1 << 20
+	DefaultIdleTimeout   = 30 * time.Second
 	overloadWriteTimeout = 100 * time.Millisecond
 )
 
@@ -29,6 +30,7 @@ type Options struct {
 	Workers      int
 	AcceptQueue  int
 	MaxLineBytes int
+	IdleTimeout  time.Duration
 	Logger       *logging.Logger
 }
 
@@ -55,6 +57,7 @@ func DefaultOptions() Options {
 		Workers:      runtime.GOMAXPROCS(0),
 		AcceptQueue:  DefaultAcceptQueue,
 		MaxLineBytes: DefaultMaxLineBytes,
+		IdleTimeout:  DefaultIdleTimeout,
 	}
 }
 
@@ -92,6 +95,12 @@ func ServeWithOptions(
 	}
 	if options.MaxLineBytes == maxInt {
 		return errors.New("serve: maximum line size is too large")
+	}
+	if options.IdleTimeout < 0 {
+		return errors.New("serve: idle timeout must not be negative")
+	}
+	if options.IdleTimeout == 0 {
+		options.IdleTimeout = DefaultIdleTimeout
 	}
 
 	serveCtx, cancel := context.WithCancel(ctx)
@@ -145,6 +154,7 @@ func ServeWithOptions(
 						connection,
 						engine,
 						options.MaxLineBytes,
+						options.IdleTimeout,
 					)
 					logConnectionTermination(options.Logger, termination)
 					connections.Delete(connection)
@@ -227,6 +237,7 @@ func serveConnection(
 	connection net.Conn,
 	engine *protocol.Engine,
 	maxLineBytes int,
+	idleTimeout time.Duration,
 ) connectionTermination {
 	if err := setNoDelay(connection); err != nil {
 		return classifyConnectionTermination(ctx, connection, "setup", err, true)
@@ -235,6 +246,9 @@ func serveConnection(
 	writer := bufio.NewWriter(connection)
 	session := engine.NewSession()
 	for {
+		if err := connection.SetReadDeadline(time.Now().Add(idleTimeout)); err != nil {
+			return classifyConnectionTermination(ctx, connection, "read", err, true)
+		}
 		frame, tooLong, err := reader.readFrame(connection)
 		if tooLong {
 			if writeErr := writeResponse(writer, []byte("-ERR FRAME command exceeds max_line_bytes\r\n")); writeErr != nil {

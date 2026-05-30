@@ -108,7 +108,7 @@ func TestServePreservesPartialLinesAndMalformedBoundaries(t *testing.T) {
 	serveDone := make(chan struct{})
 	go func() {
 		defer close(serveDone)
-		serveConnection(context.Background(), serverConnection, engine, 64)
+		serveConnection(context.Background(), serverConnection, engine, 64, DefaultIdleTimeout)
 		_ = serverConnection.Close()
 	}()
 
@@ -336,6 +336,65 @@ func TestServeCancellationClosesIdleConnections(t *testing.T) {
 	}
 }
 
+func TestIdleDeadlineReleasesWorker(t *testing.T) {
+	t.Parallel()
+
+	engine := newTestEngine(t)
+	listener := newCountingListener()
+	ctx, cancel := context.WithCancel(context.Background())
+	serveResult := make(chan error, 1)
+	go func() {
+		serveResult <- ServeWithOptions(ctx, listener, engine, Options{
+			Workers:      1,
+			AcceptQueue:  1,
+			MaxLineBytes: 64,
+			IdleTimeout:  100 * time.Millisecond,
+		})
+	}()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-serveResult; err != nil {
+			t.Errorf("ServeWithOptions() error = %v", err)
+		}
+	})
+
+	firstServer, firstClient := net.Pipe()
+	firstReadStarted := make(chan struct{})
+	waitForAccept(t, listener, 1)
+	listener.connections <- &readObservedConnection{
+		Conn:    firstServer,
+		started: firstReadStarted,
+	}
+	t.Cleanup(func() { _ = firstClient.Close() })
+	select {
+	case <-firstReadStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for idle worker read")
+	}
+
+	secondServer, secondClient := net.Pipe()
+	waitForAccept(t, listener, 2)
+	listener.connections <- secondServer
+	t.Cleanup(func() { _ = secondClient.Close() })
+	if _, err := io.WriteString(secondClient, "PING\r\n"); err != nil {
+		t.Fatalf("write queued request: %v", err)
+	}
+	if err := secondClient.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	response, err := bufio.NewReader(secondClient).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read queued response: %v", err)
+	}
+	if want := "-ERR NOAUTH authentication required\r\n"; response != want {
+		t.Fatalf("queued response = %q, want %q", response, want)
+	}
+
+	if _, err := firstClient.Read(make([]byte, 1)); err == nil {
+		t.Fatal("idle connection remained open")
+	}
+}
+
 func TestServeLifecycleLogging(t *testing.T) {
 	t.Parallel()
 
@@ -392,6 +451,7 @@ func TestServeLogsClassifiedConnectionTermination(t *testing.T) {
 			Workers:      1,
 			AcceptQueue:  1,
 			MaxLineBytes: 64,
+			IdleTimeout:  time.Nanosecond,
 			Logger:       logger,
 		})
 	}()
@@ -403,10 +463,6 @@ func TestServeLogsClassifiedConnectionTermination(t *testing.T) {
 	waitForAccept(t, listener, 1)
 	serverConnection, clientConnection := net.Pipe()
 	t.Cleanup(func() { _ = clientConnection.Close() })
-	if err := serverConnection.SetReadDeadline(time.Now().Add(-time.Second)); err != nil {
-		cancel()
-		t.Fatal(err)
-	}
 	listener.connections <- serverConnection
 
 	terminated := sink.next(t)
@@ -535,7 +591,13 @@ func TestCleanPeerCloseDoesNotLogTermination(t *testing.T) {
 		_ = clientConnection.Close()
 		close(closed)
 	}()
-	termination := serveConnection(context.Background(), serverConnection, engine, 64)
+	termination := serveConnection(
+		context.Background(),
+		serverConnection,
+		engine,
+		64,
+		DefaultIdleTimeout,
+	)
 	_ = serverConnection.Close()
 	<-closed
 
@@ -555,6 +617,7 @@ func TestServeOptionsValidation(t *testing.T) {
 		{Workers: 0, AcceptQueue: 1, MaxLineBytes: 1},
 		{Workers: 1, AcceptQueue: -1, MaxLineBytes: 1},
 		{Workers: 1, AcceptQueue: 1, MaxLineBytes: 0},
+		{Workers: 1, AcceptQueue: 1, MaxLineBytes: 1, IdleTimeout: -time.Second},
 	}
 	for _, options := range tests {
 		listener := newCountingListener()
