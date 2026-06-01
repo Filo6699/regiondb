@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"path/filepath"
 
 	"github.com/Filo6699/regiondb/internal/bitcodec"
 	"github.com/Filo6699/regiondb/internal/geometry"
@@ -238,18 +239,36 @@ func (s *Store) recoverWAL() error {
 		s.walHandles.release(walAppendHandle)
 		return fmt.Errorf("stat WAL after replay: %w", err)
 	}
-	if completeBytes != info.Size() {
-		if err := wal.Truncate(completeBytes); err != nil {
-			s.walHandles.release(walAppendHandle)
-			return fmt.Errorf("discard truncated WAL tail: %w", err)
-		}
-	}
-	sizeAfterReplay := info.Size()
+	sourceBytes := info.Size()
 	s.walHandles.release(walAppendHandle)
-	if recordCount != 0 || completeBytes != sizeAfterReplay {
-		if err := s.clearWAL(syncData); err != nil {
+	if recordCount != 0 || completeBytes != sourceBytes {
+		if err := s.replaceWALAfterReplay(syncData); err != nil {
 			return fmt.Errorf("finish WAL recovery: %w", err)
 		}
+	}
+	return nil
+}
+
+// replaceWALAfterReplay commits compaction only after every complete record has
+// been validated and loaded. Preparing the empty replacement cannot partially
+// truncate the source WAL, so a failed recovery can retry from the same bytes.
+func (s *Store) replaceWALAfterReplay(syncData bool) error {
+	if err := s.walHandles.close(); err != nil {
+		return fmt.Errorf("close WAL handles before replay compaction: %w", err)
+	}
+
+	path := filepath.Join(s.root, walName)
+	if err := writeAtomic(path, nil, syncData, s.atomicWriteFailpoint); err != nil {
+		return fmt.Errorf("replace replayed WAL: %w", err)
+	}
+	wal, err := openWALHandle(path)
+	if err != nil {
+		return fmt.Errorf("reopen compacted WAL: %w", err)
+	}
+	s.walHandles = newWALHandlePool(path, s.options.MaxOpenWALHandles, wal)
+	s.walUnsyncedUpdates = 0
+	if syncData {
+		s.recordWALFlush(walCheckpointFlush)
 	}
 	return nil
 }

@@ -152,6 +152,86 @@ func TestWALSyncFailurePropagatesAndRecoversAfterReopen(t *testing.T) {
 	closeStore(t, reopened)
 }
 
+func TestRecoveryCompactionFailurePreservesSourceWAL(t *testing.T) {
+	t.Parallel()
+
+	root := testTempDir(t)
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 8})
+	options := Options{
+		CheckpointRecords: 8,
+		CheckpointBytes:   1 << 20,
+	}
+	store := mustOpenWithOptions(t, root, g, options)
+	chunk := mustChunk(t, g)
+	if err := chunk.Set(geometry.Offset{}, 29); err != nil {
+		t.Fatal(err)
+	}
+	record := store.encodeWALRecord(walRestartCrashCoord, chunk.Bytes())
+	if err := store.appendWAL(record); err != nil {
+		t.Fatalf("append complete WAL record: %v", err)
+	}
+	wal, err := store.walHandles.acquire(walAppendHandle)
+	if err != nil {
+		t.Fatalf("acquire WAL append handle: %v", err)
+	}
+	partial := store.encodeWALRecord(geometry.Coord{X: 8, Y: 9}, mustChunk(t, g).Bytes())
+	err = appendWALHandle(wal, partial[:len(partial)-1])
+	store.walHandles.release(walAppendHandle)
+	if err != nil {
+		t.Fatalf("append partial WAL record: %v", err)
+	}
+
+	walPath := filepath.Join(root, walName)
+	source, err := os.ReadFile(walPath)
+	if err != nil {
+		t.Fatalf("read source WAL: %v", err)
+	}
+	injected := errors.New("injected replay compaction failure")
+	dataWrites := 0
+	store.atomicWriteFailpoint = func(boundary atomicWriteBoundary) error {
+		if boundary == atomicWriteDataWritten {
+			dataWrites++
+			if dataWrites == 2 {
+				return injected
+			}
+		}
+		return nil
+	}
+	if err := store.recoverWAL(); !errors.Is(err, injected) {
+		t.Fatalf("recoverWAL() error = %v, want %v", err, injected)
+	}
+	got, err := os.ReadFile(walPath)
+	if err != nil {
+		t.Fatalf("read WAL after failed recovery: %v", err)
+	}
+	if !bytes.Equal(got, source) {
+		t.Fatal("failed recovery changed the source WAL")
+	}
+
+	store.atomicWriteFailpoint = nil
+	closeStore(t, store)
+	reopened := mustOpenWithOptions(t, root, g, options)
+	recovered, err := reopened.ReadChunk(walRestartCrashCoord)
+	if err != nil {
+		t.Fatalf("ReadChunk() after retry: %v", err)
+	}
+	value, err := recovered.Get(geometry.Offset{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != 29 {
+		t.Fatalf("recovered value = %d, want 29", value)
+	}
+	info, err := os.Stat(walPath)
+	if err != nil {
+		t.Fatalf("stat WAL after retry: %v", err)
+	}
+	if info.Size() != 0 {
+		t.Fatalf("WAL size after retry = %d, want 0", info.Size())
+	}
+	closeStore(t, reopened)
+}
+
 func runWALRestartCrashChild(t *testing.T) {
 	root := os.Getenv("REGIONDB_WAL_RESTART_CRASH_ROOT")
 	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 8})
