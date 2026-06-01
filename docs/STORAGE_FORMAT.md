@@ -113,6 +113,9 @@ handle cannot be flushed and the platform replacement does not commit the
 entry itself, the write fails instead of acknowledging the missing guarantee.
 A directory that cannot be opened or a failing flush stays an ordinary write
 error and is not treated as a missing capability.
+On Windows, a file flush that reports `ERROR_INVALID_FUNCTION` or
+`ERROR_NOT_SUPPORTED` fails with an unsupported-durability error; a
+synchronized operation never falls back to unsynchronized success.
 
 These modes describe single-host filesystem calls. Hardware and filesystem
 behavior can impose weaker guarantees. There is no tombstone or alternate

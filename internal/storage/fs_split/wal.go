@@ -89,7 +89,7 @@ func (s *Store) syncWAL(kind walFlushKind) error {
 	if err != nil {
 		return fmt.Errorf("acquire WAL append handle: %w", err)
 	}
-	err = wal.Sync()
+	err = syncFile(wal)
 	s.walHandles.release(walAppendHandle)
 	if err != nil {
 		return fmt.Errorf("sync WAL: %w", err)
@@ -316,7 +316,7 @@ func (s *Store) clearWAL(syncData bool) error {
 		return fmt.Errorf("rewind WAL: %w", err)
 	}
 	if syncData {
-		if err := wal.Sync(); err != nil {
+		if err := syncFile(wal); err != nil {
 			return fmt.Errorf("sync truncated WAL: %w", err)
 		}
 		if err := s.runWALFailpoint(walCheckpointSynced); err != nil {

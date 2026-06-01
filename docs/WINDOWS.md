@@ -68,7 +68,9 @@ their documented commit points. Atomic file replacement uses
 `MoveFileEx` with write-through behavior when a synchronized replacement is
 required. Windows does not expose the same parent-directory synchronization
 operation as Unix, so the precise guarantees and limitations are defined in
-the [storage format](STORAGE_FORMAT.md).
+the [storage format](STORAGE_FORMAT.md). If the active filesystem or driver
+reports that file synchronization is unsupported, the operation fails instead
+of falling back to a weaker durability mode.
 
 `-max-open-wal-streams` defaults to two. Windows has no `RLIMIT_NOFILE`
 equivalent, so larger values are conservatively clamped to 64 cached WAL

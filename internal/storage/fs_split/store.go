@@ -492,7 +492,7 @@ func writeAtomic(
 		return err
 	}
 	if syncData {
-		if err := temporary.Sync(); err != nil {
+		if err := syncFile(temporary); err != nil {
 			return fmt.Errorf("sync temporary file: %w", err)
 		}
 		if err := runAtomicWriteFailpoint(failpoint, atomicWriteDataSynced); err != nil {
