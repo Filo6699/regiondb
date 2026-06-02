@@ -559,6 +559,122 @@ func TestResponseDeadlineBoundsDrain(t *testing.T) {
 	}
 }
 
+func TestReadDeadlineSetupErrorsFailClosed(t *testing.T) {
+	t.Parallel()
+
+	deadlineError := errors.New("deadline setup failed")
+	tests := []struct {
+		name                 string
+		buffer               *lineBuffer
+		failReadDeadlineCall int32
+		writeBeforeRead      bool
+		wantReads            int32
+	}{
+		{
+			name:                 "idle deadline",
+			buffer:               newLineBuffer(64),
+			failReadDeadlineCall: 1,
+		},
+		{
+			name: "buffered request deadline",
+			buffer: &lineBuffer{
+				data:  make([]byte, 65),
+				start: 0,
+				end:   1,
+			},
+			failReadDeadlineCall: 1,
+		},
+		{
+			name:                 "request deadline after first byte",
+			buffer:               newLineBuffer(64),
+			failReadDeadlineCall: 2,
+			writeBeforeRead:      true,
+			wantReads:            1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			serverConnection, clientConnection := net.Pipe()
+			t.Cleanup(func() {
+				_ = serverConnection.Close()
+				_ = clientConnection.Close()
+			})
+			connection := &deadlineErrorConnection{
+				Conn:                 serverConnection,
+				readDeadlineErr:      deadlineError,
+				failReadDeadlineCall: test.failReadDeadlineCall,
+			}
+			if test.writeBeforeRead {
+				go func() {
+					_, _ = clientConnection.Write([]byte("P"))
+				}()
+			}
+
+			frame, tooLong, err := test.buffer.readFrameWithin(
+				connection,
+				time.Second,
+				time.Second,
+			)
+			if !errors.Is(err, deadlineError) {
+				t.Fatalf("readFrameWithin() error = %v, want deadline setup error", err)
+			}
+			if frame != nil || tooLong {
+				t.Fatalf("readFrameWithin() = (%q, %t), want no frame", frame, tooLong)
+			}
+			if got := connection.reads.Load(); got != test.wantReads {
+				t.Fatalf("Read() calls = %d, want %d", got, test.wantReads)
+			}
+		})
+	}
+}
+
+func TestWriteDeadlineSetupErrorsFailClosed(t *testing.T) {
+	t.Parallel()
+
+	deadlineError := errors.New("deadline setup failed")
+	tests := []struct {
+		name  string
+		write func(net.Conn) error
+	}{
+		{
+			name: "response",
+			write: func(connection net.Conn) error {
+				return writeResponseWithin(
+					connection,
+					bufio.NewWriter(connection),
+					[]byte("+OK\r\n"),
+					time.Second,
+				)
+			},
+		},
+		{
+			name:  "overload response",
+			write: rejectOverloadedConnection,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			serverConnection, clientConnection := net.Pipe()
+			t.Cleanup(func() {
+				_ = serverConnection.Close()
+				_ = clientConnection.Close()
+			})
+			connection := &deadlineErrorConnection{
+				Conn:                  serverConnection,
+				writeDeadlineErr:      deadlineError,
+				failWriteDeadlineCall: 1,
+			}
+
+			if err := test.write(connection); !errors.Is(err, deadlineError) {
+				t.Fatalf("write error = %v, want deadline setup error", err)
+			}
+			if got := connection.writes.Load(); got != 0 {
+				t.Fatalf("Write() calls = %d, want 0", got)
+			}
+		})
+	}
+}
+
 func TestServeLifecycleLogging(t *testing.T) {
 	t.Parallel()
 
@@ -890,6 +1006,44 @@ func (c *readObservedConnection) Read(destination []byte) (int, error) {
 		close(c.started)
 	})
 	return c.Conn.Read(destination)
+}
+
+type deadlineErrorConnection struct {
+	net.Conn
+	readDeadlineErr       error
+	writeDeadlineErr      error
+	failReadDeadlineCall  int32
+	failWriteDeadlineCall int32
+	readDeadlineCalls     atomic.Int32
+	writeDeadlineCalls    atomic.Int32
+	reads                 atomic.Int32
+	writes                atomic.Int32
+}
+
+func (c *deadlineErrorConnection) SetReadDeadline(deadline time.Time) error {
+	call := c.readDeadlineCalls.Add(1)
+	if call == c.failReadDeadlineCall {
+		return c.readDeadlineErr
+	}
+	return c.Conn.SetReadDeadline(deadline)
+}
+
+func (c *deadlineErrorConnection) SetWriteDeadline(deadline time.Time) error {
+	call := c.writeDeadlineCalls.Add(1)
+	if call == c.failWriteDeadlineCall {
+		return c.writeDeadlineErr
+	}
+	return c.Conn.SetWriteDeadline(deadline)
+}
+
+func (c *deadlineErrorConnection) Read(destination []byte) (int, error) {
+	c.reads.Add(1)
+	return c.Conn.Read(destination)
+}
+
+func (c *deadlineErrorConnection) Write(source []byte) (int, error) {
+	c.writes.Add(1)
+	return c.Conn.Write(source)
 }
 
 func waitForAccept(t *testing.T, listener *countingListener, want int) {

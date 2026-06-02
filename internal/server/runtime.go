@@ -472,12 +472,12 @@ func (b *lineBuffer) readFrameWithin(
 ) ([]byte, bool, error) {
 	if b.start != b.end || b.pendingErr != nil {
 		if err := connection.SetReadDeadline(time.Now().Add(requestTimeout)); err != nil {
-			return nil, false, err
+			return nil, false, fmt.Errorf("set request read deadline: %w", err)
 		}
 		return b.readFrame(connection)
 	}
 	if err := connection.SetReadDeadline(time.Now().Add(idleTimeout)); err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("set idle read deadline: %w", err)
 	}
 
 	read, err := connection.Read(b.data)
@@ -486,7 +486,10 @@ func (b *lineBuffer) readFrameWithin(
 		if deadlineErr := connection.SetReadDeadline(
 			time.Now().Add(requestTimeout),
 		); deadlineErr != nil {
-			return nil, false, deadlineErr
+			return nil, false, fmt.Errorf(
+				"set request read deadline after first byte: %w",
+				deadlineErr,
+			)
 		}
 	}
 	if err != nil {
@@ -553,7 +556,7 @@ func writeResponseWithin(
 	responseTimeout time.Duration,
 ) error {
 	if err := connection.SetWriteDeadline(time.Now().Add(responseTimeout)); err != nil {
-		return err
+		return fmt.Errorf("set response write deadline: %w", err)
 	}
 	return writeResponse(writer, data)
 }
