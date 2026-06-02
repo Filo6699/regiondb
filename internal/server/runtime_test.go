@@ -460,6 +460,68 @@ func TestRequestDeadlineIsAbsoluteForTrickleClient(t *testing.T) {
 	}
 }
 
+func TestTLSHandshakeDeadlineIsAbsoluteForTrickleClient(t *testing.T) {
+	t.Parallel()
+
+	engine := newTestEngine(t)
+	serverConnection, clientConnection := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConnection.Close()
+		_ = clientConnection.Close()
+	})
+	tlsConnection := tls.Server(serverConnection, &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	})
+
+	serveDone := make(chan connectionTermination, 1)
+	go func() {
+		defer func() { _ = tlsConnection.Close() }()
+		serveDone <- serveConnection(
+			context.Background(),
+			tlsConnection,
+			engine,
+			64,
+			time.Second,
+			150*time.Millisecond,
+			time.Second,
+		)
+	}()
+
+	recordHeader := []byte{0x16, 0x03, 0x03, 0x00, 0x01}
+	ticker := time.NewTicker(40 * time.Millisecond)
+	defer ticker.Stop()
+	overall := time.NewTimer(2 * time.Second)
+	defer overall.Stop()
+	writes := 0
+	for {
+		select {
+		case termination := <-serveDone:
+			if termination.phase != "tls_handshake" || termination.reason != terminationTimeout {
+				t.Fatalf("termination = %+v, want TLS handshake timeout", termination)
+			}
+			if writes < 2 {
+				t.Fatal("TLS handshake timed out before the trickle remained active")
+			}
+			return
+		case <-ticker.C:
+			if writes == len(recordHeader) {
+				t.Fatal("trickle client completed the TLS record header")
+			}
+			if _, err := clientConnection.Write(recordHeader[writes : writes+1]); err != nil {
+				termination := <-serveDone
+				if termination.phase != "tls_handshake" ||
+					termination.reason != terminationTimeout {
+					t.Fatalf("termination = %+v, want TLS handshake timeout", termination)
+				}
+				return
+			}
+			writes++
+		case <-overall.C:
+			t.Fatal("trickle client extended the TLS handshake")
+		}
+	}
+}
+
 func TestResponseDeadlineBoundsDrain(t *testing.T) {
 	t.Parallel()
 

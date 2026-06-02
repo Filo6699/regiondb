@@ -261,6 +261,9 @@ func serveConnection(
 	requestTimeout time.Duration,
 	responseTimeout time.Duration,
 ) connectionTermination {
+	if err := handshakeTLSWithin(ctx, connection, requestTimeout); err != nil {
+		return classifyConnectionTermination(ctx, connection, "tls_handshake", err, true)
+	}
 	if err := setNoDelay(connection); err != nil {
 		return classifyConnectionTermination(ctx, connection, "setup", err, true)
 	}
@@ -316,6 +319,16 @@ func serveConnection(
 	}
 }
 
+func handshakeTLSWithin(ctx context.Context, connection net.Conn, timeout time.Duration) error {
+	tlsConnection := unwrapTLSConnection(connection)
+	if tlsConnection == nil {
+		return nil
+	}
+	handshakeContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return tlsConnection.HandshakeContext(handshakeContext)
+}
+
 func classifyConnectionTermination(
 	ctx context.Context,
 	connection net.Conn,
@@ -355,15 +368,19 @@ func classifyConnectionTermination(
 }
 
 func isTLSConnection(connection net.Conn) bool {
+	return unwrapTLSConnection(connection) != nil
+}
+
+func unwrapTLSConnection(connection net.Conn) *tls.Conn {
 	for {
-		if _, ok := connection.(*tls.Conn); ok {
-			return true
+		if tlsConnection, ok := connection.(*tls.Conn); ok {
+			return tlsConnection
 		}
 		wrapped, ok := connection.(interface {
 			NetConn() net.Conn
 		})
 		if !ok {
-			return false
+			return nil
 		}
 		connection = wrapped.NetConn()
 	}
