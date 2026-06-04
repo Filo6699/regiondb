@@ -10,6 +10,8 @@ import (
 	"github.com/Filo6699/regiondb/internal/storage"
 )
 
+const evictionCandidateRefillLimit = 16
+
 type cacheEntry struct {
 	coord   geometry.Coord
 	payload []byte
@@ -99,7 +101,7 @@ func (cache *chunkCache) put(coord geometry.Coord, payload []byte) error {
 			cache.evictionRuns.Add(1)
 			return nil
 		}
-		cache.evictToLow()
+		cache.evictForRefill()
 	}
 
 	var element *list.Element
@@ -120,8 +122,8 @@ func (cache *chunkCache) put(coord geometry.Coord, payload []byte) error {
 	return nil
 }
 
-func (cache *chunkCache) evictToLow() {
-	evicted := len(cache.entries) - cache.low
+func (cache *chunkCache) evictForRefill() {
+	evicted := min(len(cache.entries)-cache.low, evictionCandidateRefillLimit)
 	oldest := cache.recent.Back()
 	for range evicted {
 		previous := oldest.Prev()

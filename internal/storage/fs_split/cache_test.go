@@ -124,6 +124,56 @@ func TestChunkCacheEvictionHysteresisInvariants(t *testing.T) {
 	}
 }
 
+func TestChunkCacheEvictionCandidateRefillIsBounded(t *testing.T) {
+	t.Parallel()
+
+	const high = 256
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 8})
+	cache := newChunkCache(g, high)
+	payload := cachePayload(t, g, 1)
+	for write := range high {
+		if err := cache.put(geometry.Coord{X: int64(write)}, payload); err != nil {
+			t.Fatalf("fill put(%d): %v", write, err)
+		}
+	}
+	if reclaim := cache.high - cache.low; reclaim <= evictionCandidateRefillLimit {
+		t.Fatalf(
+			"test cache reclaim = %d, want more than refill limit %d",
+			reclaim,
+			evictionCandidateRefillLimit,
+		)
+	}
+
+	if err := cache.put(geometry.Coord{X: high}, payload); err != nil {
+		t.Fatalf("evicting put: %v", err)
+	}
+
+	stats := cache.runtimeStats()
+	if stats.Evictions != evictionCandidateRefillLimit {
+		t.Fatalf(
+			"evictions in one refill = %d, want limit %d",
+			stats.Evictions,
+			evictionCandidateRefillLimit,
+		)
+	}
+	if stats.EvictionRuns != 1 {
+		t.Fatalf("eviction runs = %d, want 1", stats.EvictionRuns)
+	}
+	if got, want := cache.loadedChunks(), high-evictionCandidateRefillLimit+1; got != want {
+		t.Fatalf("loaded chunks after bounded refill = %d, want %d", got, want)
+	}
+	cache.mu.Lock()
+	free := len(cache.free)
+	allocated := cache.recent.Len()
+	cache.mu.Unlock()
+	if free != evictionCandidateRefillLimit-1 {
+		t.Fatalf("free entries after admission = %d, want %d", free, evictionCandidateRefillLimit-1)
+	}
+	if allocated != high {
+		t.Fatalf("allocated entries after admission = %d, want %d", allocated, high)
+	}
+}
+
 func TestChunkCacheEvictsLeastRecentlyUsedEntry(t *testing.T) {
 	t.Parallel()
 
