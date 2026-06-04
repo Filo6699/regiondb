@@ -1147,6 +1147,43 @@ func TestStoreEvictsAndReloadsChunks(t *testing.T) {
 	}
 }
 
+func TestStoreCacheEvictionSkipsLowValueWALCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	root := testTempDir(t)
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 3})
+	const checkpointRecords = 3
+	store := mustOpenWithOptions(t, root, g, Options{
+		CheckpointRecords: checkpointRecords,
+		CheckpointBytes:   1 << 20,
+		MaxLoadedChunks:   1,
+	})
+	defer closeStore(t, store)
+
+	for index := range checkpointRecords - 1 {
+		coord := geometry.Coord{X: int64(index)}
+		if err := store.WriteChunk(coord, mustChunk(t, g)); err != nil {
+			t.Fatalf("WriteChunk(%v): %v", coord, err)
+		}
+	}
+
+	stats := store.RuntimeStats()
+	if stats.Evictions == 0 {
+		t.Fatal("writes did not exercise cache eviction")
+	}
+	if stats.Checkpoints != 0 {
+		t.Fatalf("checkpoints after low-value eviction = %d, want 0", stats.Checkpoints)
+	}
+	info, err := os.Stat(filepath.Join(root, walName))
+	if err != nil {
+		t.Fatalf("stat WAL after low-value eviction: %v", err)
+	}
+	recordBytes := int64(walHeaderBytes + g.PayloadBytes() + checksumSize)
+	if want := int64(checkpointRecords-1) * recordBytes; info.Size() != want {
+		t.Fatalf("WAL size after low-value eviction = %d, want %d", info.Size(), want)
+	}
+}
+
 func TestStoreRuntimeStats(t *testing.T) {
 	t.Parallel()
 
