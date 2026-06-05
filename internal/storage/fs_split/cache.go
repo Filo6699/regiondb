@@ -1,7 +1,6 @@
 package fs_split
 
 import (
-	"container/list"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -13,8 +12,52 @@ import (
 const evictionCandidateRefillLimit = 16
 
 type cacheEntry struct {
-	coord   geometry.Coord
-	payload []byte
+	coord    geometry.Coord
+	payload  []byte
+	previous *cacheEntry
+	next     *cacheEntry
+}
+
+type evictionRing struct {
+	front  *cacheEntry
+	back   *cacheEntry
+	length int
+}
+
+func (ring *evictionRing) pushFront(entry *cacheEntry) {
+	entry.previous = nil
+	entry.next = ring.front
+	if ring.front == nil {
+		ring.back = entry
+	} else {
+		ring.front.previous = entry
+	}
+	ring.front = entry
+	ring.length++
+}
+
+func (ring *evictionRing) moveToFront(entry *cacheEntry) {
+	if ring.front == entry {
+		return
+	}
+	ring.remove(entry)
+	ring.pushFront(entry)
+}
+
+func (ring *evictionRing) remove(entry *cacheEntry) {
+	if entry.previous == nil {
+		ring.front = entry.next
+	} else {
+		entry.previous.next = entry.next
+	}
+	if entry.next == nil {
+		ring.back = entry.previous
+	} else {
+		entry.next.previous = entry.previous
+	}
+	entry.previous = nil
+	entry.next = nil
+	ring.length--
 }
 
 type chunkCache struct {
@@ -22,9 +65,9 @@ type chunkCache struct {
 	high         int
 	low          int
 	mu           sync.Mutex
-	entries      map[geometry.Coord]*list.Element
-	recent       *list.List
-	free         []*list.Element
+	entries      map[geometry.Coord]*cacheEntry
+	recent       evictionRing
+	free         []*cacheEntry
 	loaded       atomic.Int64
 	hits         atomic.Uint64
 	misses       atomic.Uint64
@@ -44,8 +87,7 @@ func newChunkCache(g geometry.Geometry, max int) *chunkCache {
 		geometry: g,
 		high:     max,
 		low:      max - reclaim,
-		entries:  make(map[geometry.Coord]*list.Element),
-		recent:   list.New(),
+		entries:  make(map[geometry.Coord]*cacheEntry),
 	}
 }
 
@@ -59,8 +101,8 @@ func (cache *chunkCache) get(coord geometry.Coord) (*storage.Chunk, bool, error)
 		return nil, false, nil
 	}
 	cache.hits.Add(1)
-	cache.recent.MoveToFront(element)
-	entry := element.Value.(*cacheEntry)
+	cache.recent.moveToFront(element)
+	entry := element
 	chunk, err := storage.ChunkFromBytes(cache.geometry, entry.payload)
 	if err != nil {
 		return nil, false, err
@@ -84,18 +126,18 @@ func (cache *chunkCache) put(coord geometry.Coord, payload []byte) error {
 	if element, found := cache.entries[coord]; found {
 		// The buffer of a resident entry is owned by the cache alone, so an
 		// update overwrites it in place instead of replacing the entry.
-		copy(element.Value.(*cacheEntry).payload, payload)
-		cache.recent.MoveToFront(element)
+		copy(element.payload, payload)
+		cache.recent.moveToFront(element)
 		return nil
 	}
 	if len(cache.entries) == cache.high {
 		if cache.high-cache.low == 1 {
-			oldest := cache.recent.Back()
-			entry := oldest.Value.(*cacheEntry)
+			oldest := cache.recent.back
+			entry := oldest
 			delete(cache.entries, entry.coord)
 			entry.coord = coord
 			copy(entry.payload, payload)
-			cache.recent.MoveToFront(oldest)
+			cache.recent.moveToFront(oldest)
 			cache.entries[coord] = oldest
 			cache.evictions.Add(1)
 			cache.evictionRuns.Add(1)
@@ -104,17 +146,18 @@ func (cache *chunkCache) put(coord geometry.Coord, payload []byte) error {
 		cache.evictForRefill()
 	}
 
-	var element *list.Element
+	var element *cacheEntry
 	if last := len(cache.free) - 1; last >= 0 {
 		element = cache.free[last]
 		cache.free = cache.free[:last]
-		cache.recent.MoveToFront(element)
+		cache.recent.pushFront(element)
 	} else {
-		element = cache.recent.PushFront(&cacheEntry{
+		element = &cacheEntry{
 			payload: make([]byte, cache.geometry.PayloadBytes()),
-		})
+		}
+		cache.recent.pushFront(element)
 	}
-	entry := element.Value.(*cacheEntry)
+	entry := element
 	entry.coord = coord
 	copy(entry.payload, payload)
 	cache.entries[coord] = element
@@ -124,11 +167,12 @@ func (cache *chunkCache) put(coord geometry.Coord, payload []byte) error {
 
 func (cache *chunkCache) evictForRefill() {
 	evicted := min(len(cache.entries)-cache.low, evictionCandidateRefillLimit)
-	oldest := cache.recent.Back()
+	oldest := cache.recent.back
 	for range evicted {
-		previous := oldest.Prev()
-		entry := oldest.Value.(*cacheEntry)
+		previous := oldest.previous
+		entry := oldest
 		delete(cache.entries, entry.coord)
+		cache.recent.remove(oldest)
 		cache.free = append(cache.free, oldest)
 		oldest = previous
 	}
@@ -146,7 +190,7 @@ func (cache *chunkCache) remove(coord geometry.Coord) {
 		return
 	}
 	delete(cache.entries, coord)
-	cache.recent.MoveToBack(element)
+	cache.recent.remove(element)
 	cache.free = append(cache.free, element)
 	cache.loaded.Add(-1)
 }

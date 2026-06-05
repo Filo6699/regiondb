@@ -2,7 +2,6 @@ package fs_split
 
 import (
 	"bytes"
-	"container/list"
 	"errors"
 	"testing"
 
@@ -23,7 +22,7 @@ func TestChunkCacheSparseEvictionKeepsConstantFootprint(t *testing.T) {
 	// Coordinates never repeat and spread across many large chunks, so this is
 	// the sparse working set that evicts on nearly every admission.
 	buffers := make(map[*byte]struct{})
-	elements := make(map[*list.Element]struct{})
+	entries := make(map[*cacheEntry]struct{})
 	coords := make([]geometry.Coord, 0, writes)
 	for write := range writes {
 		coord := geometry.Coord{X: int64(write) * 3, Y: int64(-write) * 7}
@@ -34,11 +33,11 @@ func TestChunkCacheSparseEvictionKeepsConstantFootprint(t *testing.T) {
 
 		residents := cache.loadedChunks()
 		cache.mu.Lock()
-		allocated := cache.recent.Len()
+		allocated := cache.recent.length + len(cache.free)
 		free := len(cache.free)
-		for _, element := range cache.entries {
-			buffers[&element.Value.(*cacheEntry).payload[0]] = struct{}{}
-			elements[element] = struct{}{}
+		for _, entry := range cache.entries {
+			buffers[&entry.payload[0]] = struct{}{}
+			entries[entry] = struct{}{}
 		}
 		cache.mu.Unlock()
 
@@ -60,8 +59,8 @@ func TestChunkCacheSparseEvictionKeepsConstantFootprint(t *testing.T) {
 	if len(buffers) != max {
 		t.Fatalf("distinct cached payload buffers = %d, want %d", len(buffers), max)
 	}
-	if len(elements) != max {
-		t.Fatalf("distinct cache elements = %d, want %d", len(elements), max)
+	if len(entries) != max {
+		t.Fatalf("distinct cache entries = %d, want %d", len(entries), max)
 	}
 
 	for index, coord := range coords {
@@ -164,13 +163,59 @@ func TestChunkCacheEvictionCandidateRefillIsBounded(t *testing.T) {
 	}
 	cache.mu.Lock()
 	free := len(cache.free)
-	allocated := cache.recent.Len()
+	candidates := cache.recent.length
+	allocated := candidates + free
 	cache.mu.Unlock()
 	if free != evictionCandidateRefillLimit-1 {
 		t.Fatalf("free entries after admission = %d, want %d", free, evictionCandidateRefillLimit-1)
 	}
 	if allocated != high {
 		t.Fatalf("allocated entries after admission = %d, want %d", allocated, high)
+	}
+	if candidates != cache.loadedChunks() {
+		t.Fatalf(
+			"eviction candidates after admission = %d, want resident count %d",
+			candidates,
+			cache.loadedChunks(),
+		)
+	}
+}
+
+func TestChunkCachePrunesStaleEvictionCandidates(t *testing.T) {
+	t.Parallel()
+
+	const high = 64
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 8})
+	cache := newChunkCache(g, high)
+	payload := cachePayload(t, g, 1)
+	for write := range high {
+		if err := cache.put(geometry.Coord{X: int64(write)}, payload); err != nil {
+			t.Fatalf("fill put(%d): %v", write, err)
+		}
+	}
+
+	for cycle := range 32 {
+		for index := range high / 2 {
+			cache.remove(geometry.Coord{X: int64(cycle*high + index)})
+		}
+		cache.mu.Lock()
+		candidates := cache.recent.length
+		residents := len(cache.entries)
+		cache.mu.Unlock()
+		if candidates != residents {
+			t.Fatalf(
+				"cycle %d: eviction candidates = %d, want resident count %d",
+				cycle,
+				candidates,
+				residents,
+			)
+		}
+		for index := range high / 2 {
+			coord := geometry.Coord{X: int64((cycle+1)*high + index)}
+			if err := cache.put(coord, payload); err != nil {
+				t.Fatalf("cycle %d refill put(%v): %v", cycle, coord, err)
+			}
+		}
 	}
 }
 
@@ -331,5 +376,5 @@ func cacheBuffer(t *testing.T, cache *chunkCache, coord geometry.Coord) *byte {
 	if !found {
 		t.Fatalf("coordinate %v is not cached", coord)
 	}
-	return &element.Value.(*cacheEntry).payload[0]
+	return &element.payload[0]
 }

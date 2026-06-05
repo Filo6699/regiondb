@@ -337,10 +337,10 @@ func TestStressHotContentionEvictionCycles(t *testing.T) {
 	// payloads agree with the completed writes.
 	store.cache.mu.Lock()
 	residents := len(store.cache.entries)
-	allocated := store.cache.recent.Len()
+	candidates := store.cache.recent.length
 	free := len(store.cache.free)
-	for coord, element := range store.cache.entries {
-		entry := element.Value.(*cacheEntry)
+	allocated := candidates + free
+	for coord, entry := range store.cache.entries {
 		if entry.coord != coord {
 			store.cache.mu.Unlock()
 			t.Fatalf("cache key %v contains entry for %v", coord, entry.coord)
@@ -367,10 +367,11 @@ func TestStressHotContentionEvictionCycles(t *testing.T) {
 		}
 	}
 	store.cache.mu.Unlock()
-	if residents > 2 || allocated != residents+free {
+	if residents > 2 || candidates != residents || allocated != residents+free {
 		t.Fatalf(
-			"cache after stress: residents = %d, free = %d, allocated entries = %d, want at most 2 residents and allocated = residents + free",
+			"cache after stress: residents = %d, candidates = %d, free = %d, allocated entries = %d, want at most 2 residents, one candidate per resident, and allocated = residents + free",
 			residents,
+			candidates,
 			free,
 			allocated,
 		)
