@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -628,6 +629,28 @@ func TestReadDeadlineSetupErrorsFailClosed(t *testing.T) {
 	}
 }
 
+func TestBufferedFramesReuseConfiguredReadDeadline(t *testing.T) {
+	t.Parallel()
+
+	const frames = 32
+	var requests bytes.Buffer
+	for range frames {
+		requests.WriteString("PING\r\n")
+	}
+	connection := &bufferedDeadlineConnection{Reader: bytes.NewReader(requests.Bytes())}
+	buffer := newLineBuffer(requests.Len())
+
+	for frame := range frames {
+		got, tooLong, err := buffer.readFrameWithin(connection, time.Second, time.Second)
+		if err != nil || tooLong || string(got) != "PING\r\n" {
+			t.Fatalf("frame %d = (%q, %t, %v), want PING", frame, got, tooLong, err)
+		}
+	}
+	if got, want := connection.readDeadlineCalls, 2; got != want {
+		t.Fatalf("SetReadDeadline() calls = %d, want %d", got, want)
+	}
+}
+
 func TestWriteDeadlineSetupErrorsFailClosed(t *testing.T) {
 	t.Parallel()
 
@@ -887,7 +910,7 @@ func TestCleanPeerCloseDoesNotLogTermination(t *testing.T) {
 		t.Fatalf("termination reason = %q, want %q", termination.reason, terminationPeerClose)
 	}
 	if termination.shouldLog {
-		t.Fatal("clean peer close was marked for warning logging")
+		t.Fatalf("clean peer close was marked for warning logging: %+v", termination)
 	}
 }
 
@@ -923,6 +946,26 @@ func BenchmarkReadFrameReuse(b *testing.B) {
 			b.Fatalf("readFrame() = (%q, %t, %v)", got, tooLong, err)
 		}
 	}
+}
+
+func BenchmarkBufferedFrameDeadlineReuse(b *testing.B) {
+	const frames = 32
+	requests := bytes.Repeat([]byte("PING\r\n"), frames)
+
+	b.ReportAllocs()
+	for range b.N {
+		connection := &bufferedDeadlineConnection{Reader: bytes.NewReader(requests)}
+		buffer := newLineBuffer(len(requests))
+		for range frames {
+			if _, _, err := buffer.readFrameWithin(connection, time.Second, time.Second); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if connection.readDeadlineCalls != 2 {
+			b.Fatalf("SetReadDeadline() calls = %d, want 2", connection.readDeadlineCalls)
+		}
+	}
+	b.ReportMetric(2.0/frames, "deadline-configs/request")
 }
 
 func newTestEngine(t *testing.T) *protocol.Engine {
@@ -1018,6 +1061,40 @@ type deadlineErrorConnection struct {
 	writeDeadlineCalls    atomic.Int32
 	reads                 atomic.Int32
 	writes                atomic.Int32
+}
+
+type bufferedDeadlineConnection struct {
+	*bytes.Reader
+	readDeadlineCalls int
+}
+
+func (c *bufferedDeadlineConnection) Write([]byte) (int, error) {
+	return 0, errors.New("unexpected write")
+}
+
+func (c *bufferedDeadlineConnection) Close() error {
+	return nil
+}
+
+func (c *bufferedDeadlineConnection) LocalAddr() net.Addr {
+	return testAddress("local")
+}
+
+func (c *bufferedDeadlineConnection) RemoteAddr() net.Addr {
+	return testAddress("remote")
+}
+
+func (c *bufferedDeadlineConnection) SetDeadline(time.Time) error {
+	return nil
+}
+
+func (c *bufferedDeadlineConnection) SetReadDeadline(time.Time) error {
+	c.readDeadlineCalls++
+	return nil
+}
+
+func (c *bufferedDeadlineConnection) SetWriteDeadline(time.Time) error {
+	return nil
 }
 
 func (c *deadlineErrorConnection) SetReadDeadline(deadline time.Time) error {

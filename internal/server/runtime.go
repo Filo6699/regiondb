@@ -292,7 +292,15 @@ func serveConnection(
 		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
-				return classifyConnectionTermination(ctx, connection, "read", err, true)
+				logPeerClose := !errors.Is(err, io.ErrClosedPipe) &&
+					!errors.Is(err, net.ErrClosed)
+				return classifyConnectionTermination(
+					ctx,
+					connection,
+					"read",
+					err,
+					logPeerClose,
+				)
 			}
 			if len(frame) == 0 {
 				return classifyConnectionTermination(ctx, connection, "read", err, false)
@@ -471,6 +479,10 @@ func (b *lineBuffer) readFrameWithin(
 	requestTimeout time.Duration,
 ) ([]byte, bool, error) {
 	if b.start != b.end || b.pendingErr != nil {
+		buffered := b.data[b.start:b.end]
+		if bytes.IndexByte(buffered, '\n') >= 0 || b.pendingErr != nil {
+			return b.readFrame(connection)
+		}
 		if err := connection.SetReadDeadline(time.Now().Add(requestTimeout)); err != nil {
 			return nil, false, fmt.Errorf("set request read deadline: %w", err)
 		}
