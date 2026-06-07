@@ -3,6 +3,7 @@ package fs_split
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -866,6 +867,7 @@ func TestStoreLongWALCheckpointReopenCycles(t *testing.T) {
 		checkpointRecords = 257
 		cycles            = 4
 	)
+	checkpointTrigger := int(checkpointRecordTrigger(checkpointRecords))
 	root := testTempDir(t)
 	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 2, BlockBits: 16})
 	options := Options{
@@ -878,21 +880,21 @@ func TestStoreLongWALCheckpointReopenCycles(t *testing.T) {
 
 	for cycle := range cycles {
 		store := mustOpenWithOptions(t, root, g, options)
-		for write := range checkpointRecords {
+		for write := range checkpointTrigger {
 			chunk := mustChunk(t, g)
-			value := uint64(cycle*checkpointRecords + write + 1)
+			value := uint64(cycle*checkpointTrigger + write + 1)
 			if err := chunk.Set(geometry.Offset{}, value); err != nil {
 				t.Fatal(err)
 			}
 			if err := store.WriteChunk(coord, chunk); err != nil {
 				t.Fatalf("cycle %d write %d: %v", cycle, write, err)
 			}
-			if write == checkpointRecords-2 {
+			if write == checkpointTrigger-2 {
 				info, err := os.Stat(filepath.Join(root, walName))
 				if err != nil {
 					t.Fatal(err)
 				}
-				want := int64(checkpointRecords-1) * recordBytes
+				want := int64(checkpointTrigger-1) * recordBytes
 				if info.Size() != want {
 					t.Fatalf("cycle %d WAL size before checkpoint = %d, want %d", cycle, info.Size(), want)
 				}
@@ -918,7 +920,7 @@ func TestStoreLongWALCheckpointReopenCycles(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := uint64((cycle + 1) * checkpointRecords)
+		want := uint64((cycle + 1) * checkpointTrigger)
 		if value != want {
 			t.Fatalf("cycle %d value after reopen = %d, want %d", cycle, value, want)
 		}
@@ -976,6 +978,102 @@ func TestStoreCheckpointsWALThresholds(t *testing.T) {
 			t.Fatalf("WAL size after threshold = %d, want 0", info.Size())
 		}
 		closeStore(t, store)
+	}
+}
+
+func TestStoreCheckpointHysteresis(t *testing.T) {
+	t.Parallel()
+
+	const checkpointRecords = 4
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 1})
+	store := mustOpenWithOptions(t, testTempDir(t), g, Options{
+		CheckpointRecords: checkpointRecords,
+		CheckpointBytes:   1 << 20,
+	})
+	defer closeStore(t, store)
+
+	trigger := checkpointRecordTrigger(checkpointRecords)
+	for update := uint64(1); update < trigger; update++ {
+		if err := store.WriteChunk(geometry.Coord{}, mustChunk(t, g)); err != nil {
+			t.Fatalf("WriteChunk(%d): %v", update, err)
+		}
+		if got := store.RuntimeStats().Checkpoints; got != 0 {
+			t.Fatalf("update %d checkpoints = %d, want 0 before trigger %d", update, got, trigger)
+		}
+	}
+	if err := store.WriteChunk(geometry.Coord{}, mustChunk(t, g)); err != nil {
+		t.Fatalf("WriteChunk(trigger): %v", err)
+	}
+	if got := store.RuntimeStats().Checkpoints; got != 1 {
+		t.Fatalf("checkpoints at trigger %d = %d, want 1", trigger, got)
+	}
+}
+
+func TestStoreCheckpointByteHysteresis(t *testing.T) {
+	t.Parallel()
+
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 1})
+	recordBytes := int64(walHeaderBytes + g.PayloadBytes() + checksumSize)
+	lowerBound := 2 * recordBytes
+	store := mustOpenWithOptions(t, testTempDir(t), g, Options{
+		CheckpointRecords: math.MaxUint64,
+		CheckpointBytes:   lowerBound,
+	})
+	defer closeStore(t, store)
+
+	if err := store.WriteChunk(geometry.Coord{}, mustChunk(t, g)); err != nil {
+		t.Fatalf("WriteChunk(1): %v", err)
+	}
+	if err := store.WriteChunk(geometry.Coord{}, mustChunk(t, g)); err != nil {
+		t.Fatalf("WriteChunk(2): %v", err)
+	}
+	if got := store.RuntimeStats().Checkpoints; got != 0 {
+		t.Fatalf("checkpoints at lower byte bound %d = %d, want 0", lowerBound, got)
+	}
+
+	if err := store.WriteChunk(geometry.Coord{}, mustChunk(t, g)); err != nil {
+		t.Fatalf("WriteChunk(3): %v", err)
+	}
+	if got := store.RuntimeStats().Checkpoints; got != 1 {
+		t.Fatalf(
+			"checkpoints at byte trigger %d = %d, want 1",
+			checkpointByteTrigger(lowerBound),
+			got,
+		)
+	}
+}
+
+func TestCheckpointHysteresisTriggersSaturate(t *testing.T) {
+	t.Parallel()
+
+	recordTests := []struct {
+		lower uint64
+		want  uint64
+	}{
+		{lower: 1, want: 1},
+		{lower: 2, want: 3},
+		{lower: 3, want: 4},
+		{lower: math.MaxUint64, want: math.MaxUint64},
+	}
+	for _, test := range recordTests {
+		if got := checkpointRecordTrigger(test.lower); got != test.want {
+			t.Fatalf("checkpointRecordTrigger(%d) = %d, want %d", test.lower, got, test.want)
+		}
+	}
+
+	byteTests := []struct {
+		lower int64
+		want  int64
+	}{
+		{lower: 1, want: 1},
+		{lower: 2, want: 3},
+		{lower: 3, want: 4},
+		{lower: math.MaxInt64, want: math.MaxInt64},
+	}
+	for _, test := range byteTests {
+		if got := checkpointByteTrigger(test.lower); got != test.want {
+			t.Fatalf("checkpointByteTrigger(%d) = %d, want %d", test.lower, got, test.want)
+		}
 	}
 }
 
@@ -1211,6 +1309,9 @@ func TestStoreRuntimeStats(t *testing.T) {
 	if err := store.WriteChunk(second, mustChunk(t, g)); err != nil {
 		t.Fatalf("WriteChunk(%v): %v", second, err)
 	}
+	if err := store.WriteChunk(first, mustChunk(t, g)); err != nil {
+		t.Fatalf("WriteChunk(%v): %v", first, err)
+	}
 
 	want := storage.RuntimeStats{
 		ProcessLockMode:      writerGuardMode(),
@@ -1218,10 +1319,10 @@ func TestStoreRuntimeStats(t *testing.T) {
 		CacheHits:            1,
 		CacheMisses:          1,
 		LoadedChunks:         1,
-		Evictions:            1,
-		EvictionRuns:         1,
-		WALFlushes:           3,
-		WALForegroundFlushes: 2,
+		Evictions:            2,
+		EvictionRuns:         2,
+		WALFlushes:           4,
+		WALForegroundFlushes: 3,
 		WALCheckpointFlushes: 1,
 		OpenWALHandles:       2,
 		Checkpoints:          1,

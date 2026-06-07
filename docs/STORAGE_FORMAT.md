@@ -88,9 +88,11 @@ writes the complete encoded chunk, closes it, and atomically renames it over
 the destination. Directories are created as needed with mode `0755`. Before
 that replacement, the complete new payload is appended to the WAL.
 
-The WAL is checkpointed when either the configured record or byte threshold
-is reached. A durable checkpoint replays and synchronizes every WAL record
-before truncating and synchronizing the WAL.
+The configured record and byte thresholds are lower bounds for checkpoint
+hysteresis. Values greater than one trigger a checkpoint at 150% of the
+configured threshold, rounded down; a threshold of one remains immediate.
+A durable checkpoint replays and synchronizes every WAL record before
+truncating and synchronizing the WAL.
 
 - `relaxed` acknowledges after the WAL append and atomic chunk replacement
   without calling `fsync`.

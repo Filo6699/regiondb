@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"math"
 	"path/filepath"
 
 	"github.com/Filo6699/regiondb/internal/bitcodec"
@@ -273,8 +274,31 @@ func (s *Store) replaceWALAfterReplay(syncData bool) error {
 	return nil
 }
 
+func checkpointRecordTrigger(lowerBound uint64) uint64 {
+	if lowerBound <= 1 {
+		return lowerBound
+	}
+	extra := max(uint64(1), lowerBound/2)
+	if lowerBound > math.MaxUint64-extra {
+		return math.MaxUint64
+	}
+	return lowerBound + extra
+}
+
+func checkpointByteTrigger(lowerBound int64) int64 {
+	if lowerBound <= 1 {
+		return lowerBound
+	}
+	extra := max(int64(1), lowerBound/2)
+	if lowerBound > math.MaxInt64-extra {
+		return math.MaxInt64
+	}
+	return lowerBound + extra
+}
+
 func (s *Store) checkpointDue() bool {
-	return s.walRecords >= s.options.CheckpointRecords || s.walBytes >= s.options.CheckpointBytes
+	return s.walRecords >= checkpointRecordTrigger(s.options.CheckpointRecords) ||
+		s.walBytes >= checkpointByteTrigger(s.options.CheckpointBytes)
 }
 
 func (s *Store) checkpointWAL() error {
