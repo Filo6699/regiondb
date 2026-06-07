@@ -9,8 +9,6 @@ import (
 	"github.com/Filo6699/regiondb/internal/storage"
 )
 
-const evictionCandidateRefillLimit = 16
-
 type cacheEntry struct {
 	coord    geometry.Coord
 	payload  []byte
@@ -62,8 +60,7 @@ func (ring *evictionRing) remove(entry *cacheEntry) {
 
 type chunkCache struct {
 	geometry     geometry.Geometry
-	high         int
-	low          int
+	max          int
 	mu           sync.Mutex
 	entries      map[geometry.Coord]*cacheEntry
 	recent       evictionRing
@@ -76,17 +73,9 @@ type chunkCache struct {
 }
 
 func newChunkCache(g geometry.Geometry, max int) *chunkCache {
-	// Keep the configured maximum as a hard high watermark. Reclaiming one
-	// quarter of the residents gives subsequent admissions room before another
-	// eviction run; very small caches still reclaim at least one entry.
-	reclaim := max / 4
-	if reclaim == 0 {
-		reclaim = 1
-	}
 	return &chunkCache{
 		geometry: g,
-		high:     max,
-		low:      max - reclaim,
+		max:      max,
 		entries:  make(map[geometry.Coord]*cacheEntry),
 	}
 }
@@ -130,20 +119,16 @@ func (cache *chunkCache) put(coord geometry.Coord, payload []byte) error {
 		cache.recent.moveToFront(element)
 		return nil
 	}
-	if len(cache.entries) == cache.high {
-		if cache.high-cache.low == 1 {
-			oldest := cache.recent.back
-			entry := oldest
-			delete(cache.entries, entry.coord)
-			entry.coord = coord
-			copy(entry.payload, payload)
-			cache.recent.moveToFront(oldest)
-			cache.entries[coord] = oldest
-			cache.evictions.Add(1)
-			cache.evictionRuns.Add(1)
-			return nil
-		}
-		cache.evictForRefill()
+	if len(cache.entries) == cache.max {
+		oldest := cache.recent.back
+		delete(cache.entries, oldest.coord)
+		oldest.coord = coord
+		copy(oldest.payload, payload)
+		cache.recent.moveToFront(oldest)
+		cache.entries[coord] = oldest
+		cache.evictions.Add(1)
+		cache.evictionRuns.Add(1)
+		return nil
 	}
 
 	var element *cacheEntry
@@ -163,22 +148,6 @@ func (cache *chunkCache) put(coord geometry.Coord, payload []byte) error {
 	cache.entries[coord] = element
 	cache.loaded.Add(1)
 	return nil
-}
-
-func (cache *chunkCache) evictForRefill() {
-	evicted := min(len(cache.entries)-cache.low, evictionCandidateRefillLimit)
-	oldest := cache.recent.back
-	for range evicted {
-		previous := oldest.previous
-		entry := oldest
-		delete(cache.entries, entry.coord)
-		cache.recent.remove(oldest)
-		cache.free = append(cache.free, oldest)
-		oldest = previous
-	}
-	cache.loaded.Add(-int64(evicted))
-	cache.evictions.Add(uint64(evicted))
-	cache.evictionRuns.Add(1)
 }
 
 func (cache *chunkCache) remove(coord geometry.Coord) {

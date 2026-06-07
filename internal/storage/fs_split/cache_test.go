@@ -81,103 +81,42 @@ func TestChunkCacheSparseEvictionKeepsConstantFootprint(t *testing.T) {
 	}
 }
 
-func TestChunkCacheEvictionHysteresisInvariants(t *testing.T) {
+func TestChunkCacheEvictionWorkIsBoundedPerAdmission(t *testing.T) {
 	t.Parallel()
 
-	const high = 8
+	const (
+		max       = 256
+		evictions = 64
+	)
 	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 8})
-	cache := newChunkCache(g, high)
+	cache := newChunkCache(g, max)
 	payload := cachePayload(t, g, 1)
 
-	for write := range high + 1 {
+	for write := range max {
 		if err := cache.put(geometry.Coord{X: int64(write)}, payload); err != nil {
 			t.Fatalf("put(%d): %v", write, err)
 		}
 	}
 
-	stats := cache.runtimeStats()
-	if cache.low >= cache.high {
-		t.Fatalf("watermarks: low = %d, high = %d", cache.low, cache.high)
-	}
-	if got, want := cache.loadedChunks(), cache.low+1; got != want {
-		t.Fatalf("loaded chunks after high-water eviction = %d, want %d", got, want)
-	}
-	if stats.Evictions != uint64(cache.high-cache.low) {
-		t.Fatalf("evictions = %d, want high-low = %d", stats.Evictions, cache.high-cache.low)
-	}
-	if stats.EvictionRuns != 1 {
-		t.Fatalf("eviction runs = %d, want 1", stats.EvictionRuns)
-	}
-
-	for write := high + 1; cache.loadedChunks() < cache.high; write++ {
-		if err := cache.put(geometry.Coord{X: int64(write)}, payload); err != nil {
-			t.Fatalf("refill put(%d): %v", write, err)
+	for write := range evictions {
+		before := cache.runtimeStats()
+		coord := geometry.Coord{X: int64(max + write)}
+		if err := cache.put(coord, payload); err != nil {
+			t.Fatalf("evicting put(%v): %v", coord, err)
+		}
+		after := cache.runtimeStats()
+		if after.Evictions-before.Evictions != 1 ||
+			after.EvictionRuns-before.EvictionRuns != 1 {
+			t.Fatalf(
+				"write %d eviction delta = (%d, %d), want (1, 1)",
+				write,
+				after.Evictions-before.Evictions,
+				after.EvictionRuns-before.EvictionRuns,
+			)
 		}
 	}
-	refilled := cache.runtimeStats()
-	if refilled.Evictions != stats.Evictions || refilled.EvictionRuns != stats.EvictionRuns {
-		t.Fatalf("refill changed eviction counters: before=%+v after=%+v", stats, refilled)
-	}
-	if got := cache.loadedChunks(); got > cache.high {
-		t.Fatalf("loaded chunks = %d, want at most high watermark %d", got, cache.high)
-	}
-}
-
-func TestChunkCacheEvictionCandidateRefillIsBounded(t *testing.T) {
-	t.Parallel()
-
-	const high = 256
-	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 8})
-	cache := newChunkCache(g, high)
-	payload := cachePayload(t, g, 1)
-	for write := range high {
-		if err := cache.put(geometry.Coord{X: int64(write)}, payload); err != nil {
-			t.Fatalf("fill put(%d): %v", write, err)
-		}
-	}
-	if reclaim := cache.high - cache.low; reclaim <= evictionCandidateRefillLimit {
-		t.Fatalf(
-			"test cache reclaim = %d, want more than refill limit %d",
-			reclaim,
-			evictionCandidateRefillLimit,
-		)
-	}
-
-	if err := cache.put(geometry.Coord{X: high}, payload); err != nil {
-		t.Fatalf("evicting put: %v", err)
-	}
-
-	stats := cache.runtimeStats()
-	if stats.Evictions != evictionCandidateRefillLimit {
-		t.Fatalf(
-			"evictions in one refill = %d, want limit %d",
-			stats.Evictions,
-			evictionCandidateRefillLimit,
-		)
-	}
-	if stats.EvictionRuns != 1 {
-		t.Fatalf("eviction runs = %d, want 1", stats.EvictionRuns)
-	}
-	if got, want := cache.loadedChunks(), high-evictionCandidateRefillLimit+1; got != want {
-		t.Fatalf("loaded chunks after bounded refill = %d, want %d", got, want)
-	}
-	cache.mu.Lock()
-	free := len(cache.free)
-	candidates := cache.recent.length
-	allocated := candidates + free
-	cache.mu.Unlock()
-	if free != evictionCandidateRefillLimit-1 {
-		t.Fatalf("free entries after admission = %d, want %d", free, evictionCandidateRefillLimit-1)
-	}
-	if allocated != high {
-		t.Fatalf("allocated entries after admission = %d, want %d", allocated, high)
-	}
-	if candidates != cache.loadedChunks() {
-		t.Fatalf(
-			"eviction candidates after admission = %d, want resident count %d",
-			candidates,
-			cache.loadedChunks(),
-		)
+	if got := cache.loadedChunks(); got != max {
+		t.Fatalf("loaded chunks = %d, want %d", got, max)
 	}
 }
 
