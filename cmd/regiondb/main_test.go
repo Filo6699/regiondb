@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Filo6699/regiondb/internal/defaults"
 	"github.com/Filo6699/regiondb/internal/geometry"
 	"github.com/Filo6699/regiondb/internal/protocol"
 	"github.com/Filo6699/regiondb/internal/server"
@@ -50,21 +51,21 @@ func TestParseConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseConfig() error = %v, stderr = %q", err, stderr.String())
 	}
-	if got.listenAddress != server.DefaultAddress || got.dataDir != "data" || got.token != "secret" {
+	if got.listenAddress != defaults.Address || got.dataDir != "data" || got.token != "secret" {
 		t.Fatalf("parseConfig() strings = %+v", got)
 	}
 	if got.geometry.ChunkEdge != 16 || got.geometry.LargeChunkEdge != 8 || got.geometry.BlockBits != 5 {
 		t.Fatalf("parseConfig() geometry = %+v", got.geometry)
 	}
 	if got.durability != fs_split.DurabilityRelaxed ||
-		got.checkpointRecords != fs_split.DefaultCheckpointRecords ||
-		got.checkpointBytes != fs_split.DefaultCheckpointBytes ||
-		got.maxLoadedChunks != fs_split.DefaultMaxLoadedChunks ||
-		got.maxOpenWALStreams != fs_split.DefaultMaxOpenWALHandles ||
-		got.walGroupCommitUpdates != fs_split.DefaultWALGroupCommitUpdates ||
-		got.workers != server.DefaultOptions().Workers ||
-		got.acceptQueue != server.DefaultAcceptQueue ||
-		got.maxLineBytes != server.DefaultMaxLineBytes {
+		got.checkpointRecords != defaults.CheckpointRecords ||
+		got.checkpointBytes != defaults.CheckpointBytes ||
+		got.maxLoadedChunks != defaults.MaxLoadedChunks ||
+		got.maxOpenWALStreams != defaults.MaxOpenWALHandles ||
+		got.walGroupCommitUpdates != defaults.WALGroupCommitUpdates ||
+		got.workers != defaults.Workers() ||
+		got.acceptQueue != defaults.AcceptQueue ||
+		got.maxLineBytes != defaults.MaxLineBytes {
 		t.Fatalf("parseConfig() options = %+v", got)
 	}
 }

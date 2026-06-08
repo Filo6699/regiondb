@@ -10,21 +10,21 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"runtime"
 	"sync"
 	"time"
 
+	"github.com/Filo6699/regiondb/internal/defaults"
 	"github.com/Filo6699/regiondb/internal/logging"
 	"github.com/Filo6699/regiondb/internal/protocol"
 )
 
 const (
-	DefaultAddress         = "127.0.0.1:4242"
-	DefaultAcceptQueue     = 128
-	DefaultMaxLineBytes    = 1 << 20
-	DefaultIdleTimeout     = 30 * time.Second
-	DefaultRequestTimeout  = 10 * time.Second
-	DefaultResponseTimeout = 10 * time.Second
+	DefaultAddress         = defaults.Address
+	DefaultAcceptQueue     = defaults.AcceptQueue
+	DefaultMaxLineBytes    = defaults.MaxLineBytes
+	DefaultIdleTimeout     = defaults.IdleTimeout
+	DefaultRequestTimeout  = defaults.RequestTimeout
+	DefaultResponseTimeout = defaults.ResponseTimeout
 	overloadWriteTimeout   = 100 * time.Millisecond
 )
 
@@ -58,7 +58,7 @@ type connectionTermination struct {
 
 func DefaultOptions() Options {
 	return Options{
-		Workers:         runtime.GOMAXPROCS(0),
+		Workers:         defaults.Workers(),
 		AcceptQueue:     DefaultAcceptQueue,
 		MaxLineBytes:    DefaultMaxLineBytes,
 		IdleTimeout:     DefaultIdleTimeout,

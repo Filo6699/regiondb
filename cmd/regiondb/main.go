@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/Filo6699/regiondb/internal/defaults"
 	"github.com/Filo6699/regiondb/internal/geometry"
 	"github.com/Filo6699/regiondb/internal/logging"
 	"github.com/Filo6699/regiondb/internal/protocol"
@@ -162,31 +163,30 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	var largeChunkEdge uint64
 	var blockBits uint64
 	var durability string
-	flags.StringVar(&result.listenAddress, "listen", server.DefaultAddress, "TCP listen address in host:port form")
+	flags.StringVar(&result.listenAddress, "listen", defaults.Address, "TCP listen address in host:port form")
 	flags.StringVar(&result.dataDir, "data-dir", "", "directory for chunk data")
 	flags.StringVar(&result.token, "token", "", "authentication token")
 	flags.StringVar(&result.tlsCert, "tls-cert", "", "PEM TLS certificate file")
 	flags.StringVar(&result.tlsKey, "tls-key", "", "PEM TLS private key file")
 	flags.StringVar(&durability, "durability", string(fs_split.DurabilityRelaxed), "durability mode: relaxed, fsync-wal, or fsync-checkpoint")
-	flags.Uint64Var(&result.checkpointRecords, "checkpoint-records", fs_split.DefaultCheckpointRecords, "WAL records between checkpoints")
-	flags.Int64Var(&result.checkpointBytes, "checkpoint-bytes", fs_split.DefaultCheckpointBytes, "WAL bytes between checkpoints")
-	flags.IntVar(&result.maxLoadedChunks, "max-loaded-chunks", fs_split.DefaultMaxLoadedChunks, "maximum chunks retained in memory")
+	flags.Uint64Var(&result.checkpointRecords, "checkpoint-records", defaults.CheckpointRecords, "WAL records between checkpoints")
+	flags.Int64Var(&result.checkpointBytes, "checkpoint-bytes", defaults.CheckpointBytes, "WAL bytes between checkpoints")
+	flags.IntVar(&result.maxLoadedChunks, "max-loaded-chunks", defaults.MaxLoadedChunks, "maximum chunks retained in memory")
 	flags.IntVar(
 		&result.maxOpenWALStreams,
 		"max-open-wal-streams",
-		fs_split.DefaultMaxOpenWALHandles,
+		defaults.MaxOpenWALHandles,
 		"maximum cached WAL streams before the OS descriptor clamp",
 	)
 	flags.Uint64Var(
 		&result.walGroupCommitUpdates,
 		"wal-group-commit-updates",
-		fs_split.DefaultWALGroupCommitUpdates,
+		defaults.WALGroupCommitUpdates,
 		"WAL updates per sync",
 	)
-	runtimeDefaults := server.DefaultOptions()
-	flags.IntVar(&result.workers, "workers", runtimeDefaults.Workers, "number of connection workers")
-	flags.IntVar(&result.acceptQueue, "accept-queue", runtimeDefaults.AcceptQueue, "maximum queued connections")
-	flags.IntVar(&result.maxLineBytes, "max-line-bytes", runtimeDefaults.MaxLineBytes, "maximum command line size including CRLF")
+	flags.IntVar(&result.workers, "workers", defaults.Workers(), "number of connection workers")
+	flags.IntVar(&result.acceptQueue, "accept-queue", defaults.AcceptQueue, "maximum queued connections")
+	flags.IntVar(&result.maxLineBytes, "max-line-bytes", defaults.MaxLineBytes, "maximum command line size including CRLF")
 	flags.Uint64Var(&chunkEdge, "chunk-edge", 0, "blocks per chunk edge")
 	flags.Uint64Var(&largeChunkEdge, "large-chunk-edge", 0, "chunks per large-chunk edge")
 	flags.Uint64Var(&blockBits, "block-bits", 0, "bits per block")

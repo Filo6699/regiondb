@@ -3,14 +3,16 @@ package fs_split
 import (
 	"errors"
 	"fmt"
+
+	"github.com/Filo6699/regiondb/internal/defaults"
 )
 
 const (
-	DefaultCheckpointRecords     = 1024
-	DefaultCheckpointBytes       = 64 << 20
-	DefaultMaxLoadedChunks       = 1024
-	DefaultMaxOpenWALHandles     = 2
-	DefaultWALGroupCommitUpdates = 1
+	DefaultCheckpointRecords     = defaults.CheckpointRecords
+	DefaultCheckpointBytes       = defaults.CheckpointBytes
+	DefaultMaxLoadedChunks       = defaults.MaxLoadedChunks
+	DefaultMaxOpenWALHandles     = defaults.MaxOpenWALHandles
+	DefaultWALGroupCommitUpdates = defaults.WALGroupCommitUpdates
 )
 
 type DurabilityMode string
