@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -37,7 +38,7 @@ func testIntegrationTCPRequestDeadline(t *testing.T) {
 	defer func() {
 		_ = connection.Close()
 	}()
-	if _, err := connection.Write([]byte("P")); err != nil {
+	if err := writeIntegrationRequest(connection, "P"); err != nil {
 		t.Fatalf("write partial request: %v", err)
 	}
 	if _, err := connection.Read(make([]byte, 1)); err == nil {
@@ -53,7 +54,7 @@ func testIntegrationTCPCommandLifecycle(t *testing.T) {
 	}()
 
 	request := "PING\r\nAUTH secret\r\nSET -1 2 9\r\nINFO\r\nEXISTS -1 2\r\nGET -1 2\r\nCHUNK -1 1\r\nQUIT\r\n"
-	if _, err := io.WriteString(connection, request); err != nil {
+	if err := writeIntegrationRequest(connection, request); err != nil {
 		t.Fatalf("write request: %v", err)
 	}
 
@@ -149,7 +150,7 @@ func testIntegrationTCPConcurrentClients(t *testing.T) {
 			}
 
 			request := fmt.Sprintf("AUTH secret\r\nSET %d 0 %d\r\nGET %d 0\r\nQUIT\r\n", client, client, client)
-			if _, err := io.WriteString(connection, request); err != nil {
+			if err := writeIntegrationRequest(connection, request); err != nil {
 				results <- fmt.Errorf("client %d write: %w", client, err)
 				return
 			}
@@ -292,6 +293,55 @@ func dialIntegrationServer(t *testing.T, address net.Addr) net.Conn {
 		t.Fatal(err)
 	}
 	return connection
+}
+
+func writeIntegrationRequest(writer io.Writer, request string) error {
+	data := []byte(request)
+	for len(data) > 0 {
+		written, err := writer.Write(data)
+		if err != nil {
+			return err
+		}
+		if written == 0 {
+			return io.ErrShortWrite
+		}
+		data = data[written:]
+	}
+	return nil
+}
+
+func TestWriteIntegrationRequestHandlesPartialWrites(t *testing.T) {
+	t.Parallel()
+
+	var destination bytes.Buffer
+	writer := &partialIntegrationWriter{
+		writer: &destination,
+		limit:  2,
+	}
+	const request = "PING\r\n"
+	if err := writeIntegrationRequest(writer, request); err != nil {
+		t.Fatalf("writeIntegrationRequest() error = %v", err)
+	}
+	if got := destination.String(); got != request {
+		t.Fatalf("writeIntegrationRequest() = %q, want %q", got, request)
+	}
+	if writer.writes < 2 {
+		t.Fatalf("Write() calls = %d, want multiple calls", writer.writes)
+	}
+}
+
+type partialIntegrationWriter struct {
+	writer io.Writer
+	limit  int
+	writes int
+}
+
+func (w *partialIntegrationWriter) Write(data []byte) (int, error) {
+	w.writes++
+	if len(data) > w.limit {
+		data = data[:w.limit]
+	}
+	return w.writer.Write(data)
 }
 
 type integrationObservedListener struct {
