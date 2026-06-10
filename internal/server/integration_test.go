@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -199,8 +200,8 @@ func testIntegrationTCPOverloadResponse(t *testing.T) {
 	}
 	listener := &integrationObservedListener{
 		Listener:    tcpListener,
-		accepted:    make(chan int, 3),
-		readStarted: make(chan int, 1),
+		accepted:    make(chan int, 4),
+		readStarted: make(chan int, 5),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	serveResult := make(chan error, 1)
@@ -226,19 +227,71 @@ func testIntegrationTCPOverloadResponse(t *testing.T) {
 	waitForIntegrationSignal(t, listener.accepted, 1, "first accept")
 	waitForIntegrationSignal(t, listener.readStarted, 1, "first worker read")
 
-	second := dialIntegrationServer(t, listener.Addr())
-	t.Cleanup(func() { _ = second.Close() })
-	waitForIntegrationSignal(t, listener.accepted, 2, "second accept")
-
-	rejected := dialIntegrationServer(t, listener.Addr())
-	t.Cleanup(func() { _ = rejected.Close() })
-	waitForIntegrationSignal(t, listener.accepted, 3, "third accept")
-	response, err := bufio.NewReader(rejected).ReadString('\n')
-	if err != nil {
-		t.Fatalf("read overload response: %v", err)
+	candidates := make([]net.Conn, 0, 3)
+	for index := range 3 {
+		connection := dialIntegrationServer(t, listener.Addr())
+		candidates = append(candidates, connection)
+		t.Cleanup(func() { _ = connection.Close() })
+		waitForIntegrationSignal(t, listener.accepted, index+2, fmt.Sprintf("candidate %d accept", index))
 	}
-	if want := "-ERR BUSY server overloaded\r\n"; response != want {
-		t.Fatalf("overload response = %q, want %q", response, want)
+
+	if err := writeIntegrationRequest(first, "QUIT\r\n"); err != nil {
+		t.Fatalf("release occupied worker: %v", err)
+	}
+	if response, err := bufio.NewReader(first).ReadString('\n'); err != nil {
+		t.Fatalf("read occupied worker response: %v", err)
+	} else if want := "+OK\r\n"; response != want {
+		t.Fatalf("occupied worker response = %q, want %q", response, want)
+	}
+
+	served := 0
+	rejected := 0
+	for index, connection := range candidates {
+		if err := connection.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatalf("set candidate %d deadline: %v", index, err)
+		}
+		// A rejected peer may finish its close before this write reaches the
+		// kernel. The overload response can still be readable from the socket,
+		// so classify the server outcome below instead of requiring this write.
+		_ = writeIntegrationRequest(connection, "PING\r\n")
+		response, err := bufio.NewReader(connection).ReadString('\n')
+		if err != nil {
+			t.Fatalf("read candidate %d response: %v", index, err)
+		}
+		switch response {
+		case "-ERR NOAUTH authentication required\r\n":
+			served++
+		case "-ERR BUSY server overloaded\r\n":
+			rejected++
+		default:
+			t.Fatalf("candidate %d response = %q, want served or overloaded response", index, response)
+		}
+	}
+	// TCP accept and close completion order differs across operating systems.
+	// Queue capacity is the business invariant: one candidate must survive in
+	// the pending queue and every connection beyond it must be rejected.
+	if served != 1 || rejected != 2 {
+		t.Fatalf("candidate outcomes: served = %d, rejected = %d, want 1 and 2", served, rejected)
+	}
+	for index, connection := range candidates {
+		if err := connection.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("close candidate %d: %v", index, err)
+		}
+	}
+
+	recovery := dialIntegrationServer(t, listener.Addr())
+	t.Cleanup(func() { _ = recovery.Close() })
+	waitForIntegrationSignal(t, listener.accepted, 5, "recovery accept")
+	if err := recovery.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("set recovery deadline: %v", err)
+	}
+	if err := writeIntegrationRequest(recovery, "PING\r\n"); err != nil {
+		t.Fatalf("write recovery request: %v", err)
+	}
+	if response, err := bufio.NewReader(recovery).ReadString('\n'); err != nil {
+		t.Fatalf("read recovery response: %v", err)
+	} else if want := "-ERR NOAUTH authentication required\r\n"; response != want {
+		t.Fatalf("recovery response = %q, want %q", response, want)
 	}
 }
 
