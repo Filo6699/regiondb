@@ -246,6 +246,7 @@ func testIntegrationTCPOverloadResponse(t *testing.T) {
 
 	served := 0
 	rejected := 0
+	closedWithoutReply := 0
 	for index, connection := range candidates {
 		if err := connection.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
 			t.Fatalf("set candidate %d deadline: %v", index, err)
@@ -256,7 +257,18 @@ func testIntegrationTCPOverloadResponse(t *testing.T) {
 		_ = writeIntegrationRequest(connection, "PING\r\n")
 		response, err := bufio.NewReader(connection).ReadString('\n')
 		if err != nil {
-			t.Fatalf("read candidate %d response: %v", index, err)
+			var networkError net.Error
+			if errors.As(err, &networkError) && networkError.Timeout() {
+				t.Fatalf("candidate %d rejection timed out: %v", index, err)
+			}
+			// Windows can turn the server's close into WSAECONNABORTED when
+			// this client write races with the buffered overload reply. The
+			// peer still rejected the accepted connection; only the reply is
+			// unavailable, unlike a timeout that would leave the outcome
+			// ambiguous.
+			rejected++
+			closedWithoutReply++
+			continue
 		}
 		switch response {
 		case "-ERR NOAUTH authentication required\r\n":
@@ -271,7 +283,12 @@ func testIntegrationTCPOverloadResponse(t *testing.T) {
 	// Queue capacity is the business invariant: one candidate must survive in
 	// the pending queue and every connection beyond it must be rejected.
 	if served != 1 || rejected != 2 {
-		t.Fatalf("candidate outcomes: served = %d, rejected = %d, want 1 and 2", served, rejected)
+		t.Fatalf(
+			"candidate outcomes: served = %d, rejected = %d (closed without reply = %d), want 1 and 2",
+			served,
+			rejected,
+			closedWithoutReply,
+		)
 	}
 	for index, connection := range candidates {
 		if err := connection.Close(); err != nil && !errors.Is(err, net.ErrClosed) {

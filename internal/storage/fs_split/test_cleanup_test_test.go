@@ -30,7 +30,7 @@ func TestRemoveTestDirectoryRetriesHandleReleaseErrors(t *testing.T) {
 	if attempts != 3 {
 		t.Fatalf("remove attempts = %d, want 3", attempts)
 	}
-	if want := testCleanupRetryDelays[:2]; !reflect.DeepEqual(waits, want) {
+	if want := []time.Duration{testCleanupRetryDelay, testCleanupRetryDelay}; !reflect.DeepEqual(waits, want) {
 		t.Fatalf("retry waits = %v, want %v", waits, want)
 	}
 }
@@ -54,5 +54,38 @@ func TestRemoveTestDirectoryDoesNotRetryOtherErrors(t *testing.T) {
 	}
 	if attempts != 1 || waits != 0 {
 		t.Fatalf("remove attempts = %d, waits = %d, want 1 and 0", attempts, waits)
+	}
+}
+
+func TestRemoveTestDirectoryBoundsRetryWindow(t *testing.T) {
+	t.Parallel()
+
+	handleBusy := errors.New("handle is still open")
+	attempts := 0
+	waits := 0
+	err := removeTestDirectoryWithRetry(
+		func() error {
+			attempts++
+			return handleBusy
+		},
+		func(err error) bool { return errors.Is(err, handleBusy) },
+		func(delay time.Duration) {
+			if delay != testCleanupRetryDelay {
+				t.Fatalf("retry delay = %v, want %v", delay, testCleanupRetryDelay)
+			}
+			waits++
+		},
+	)
+	if !errors.Is(err, handleBusy) {
+		t.Fatalf("removeTestDirectoryWithRetry() error = %v, want %v", err, handleBusy)
+	}
+	if attempts != testCleanupRetryAttempts+1 || waits != testCleanupRetryAttempts {
+		t.Fatalf(
+			"remove attempts = %d, waits = %d, want %d and %d",
+			attempts,
+			waits,
+			testCleanupRetryAttempts+1,
+			testCleanupRetryAttempts,
+		)
 	}
 }

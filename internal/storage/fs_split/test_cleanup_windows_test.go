@@ -30,6 +30,9 @@ func testTempDir(t *testing.T) string {
 }
 
 func removeTestDirectory(directory string) error {
+	// Windows may retain a closed file handle while antivirus or indexing
+	// completes. Retry that OS variance for a bounded two seconds, but preserve
+	// the invariant that successful cleanup means the directory is gone.
 	return removeTestDirectoryWithRetry(
 		func() error { return os.RemoveAll(directory) },
 		isRetryableTestCleanupError,

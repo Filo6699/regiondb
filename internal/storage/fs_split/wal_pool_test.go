@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -129,15 +128,7 @@ func TestWALHandlePoolCloseWaitsForLeases(t *testing.T) {
 	go func() {
 		closed <- pool.close()
 	}()
-	for {
-		pool.mu.Lock()
-		closing := pool.closed
-		pool.mu.Unlock()
-		if closing {
-			break
-		}
-		runtime.Gosched()
-	}
+	waitForWALHandlePoolClosing(t, pool)
 	if _, err := pool.acquire(walScanHandle); !errors.Is(err, errWALHandlePoolClosed) {
 		t.Fatalf("acquire during close error = %v, want %v", err, errWALHandlePoolClosed)
 	}
@@ -153,6 +144,31 @@ func TestWALHandlePoolCloseWaitsForLeases(t *testing.T) {
 	}
 	if stats := pool.stats(); stats.open != 0 {
 		t.Fatalf("open handles after close = %d, want 0", stats.open)
+	}
+}
+
+func waitForWALHandlePoolClosing(t *testing.T, pool *walHandlePool) {
+	t.Helper()
+
+	// Loaded Windows and macOS runners can defer the close goroutine well past
+	// a single scheduler yield. Observe the state transition directly and bound
+	// the wait without weakening the invariant that new leases are rejected.
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	poll := time.NewTicker(time.Millisecond)
+	defer poll.Stop()
+	for {
+		pool.mu.Lock()
+		closing := pool.closed
+		pool.mu.Unlock()
+		if closing {
+			return
+		}
+		select {
+		case <-poll.C:
+		case <-deadline.C:
+			t.Fatal("timed out waiting for WAL handle pool to start closing")
+		}
 	}
 }
 
