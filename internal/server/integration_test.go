@@ -54,7 +54,8 @@ func testIntegrationTCPCommandLifecycle(t *testing.T) {
 		_ = connection.Close()
 	}()
 
-	request := "PING\r\nAUTH secret\r\nSET -1 2 9\r\nINFO\r\nEXISTS -1 2\r\nGET -1 2\r\nCHUNK -1 1\r\nQUIT\r\n"
+	request := "PING\r\nAUTH secret\r\nSET -1 2 9\r\nINFO\r\nEXISTS -1 2\r\nGET -1 2\r\nCHUNK -1 1\r\n" +
+		"SET -1 2 0\r\nEXISTS -1 2\r\nUNSET -1 2\r\nGET -1 2\r\nEXISTS -1 2\r\nQUIT\r\n"
 	if err := writeIntegrationRequest(connection, request); err != nil {
 		t.Fatalf("write request: %v", err)
 	}
@@ -96,6 +97,12 @@ func testIntegrationTCPCommandLifecycle(t *testing.T) {
 		"9\r\n",
 		"$4\r\n",
 		"9000\r\n",
+		"+OK\r\n",
+		"+OK 1\r\n",
+		"+OK\r\n",
+		"$1\r\n",
+		"0\r\n",
+		"+OK 0\r\n",
 		"+OK\r\n",
 	)
 	for _, want := range wantResponses {

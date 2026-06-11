@@ -118,6 +118,8 @@ func (s *Session) Execute(command Command) Response {
 		return s.get(command.Args)
 	case "SET":
 		return s.set(command.Args)
+	case "UNSET":
+		return s.unset(command.Args)
 	case "EXISTS":
 		return s.exists(command.Args)
 	case "CHUNK":
@@ -187,7 +189,7 @@ func (s *Session) get(args []string) Response {
 	}
 	s.engine.mu.RLock()
 	defer s.engine.mu.RUnlock()
-	value, response := s.readBlock(block)
+	value, _, response := s.readBlock(block)
 	if response != nil {
 		return *response
 	}
@@ -235,6 +237,33 @@ func (s *Session) set(args []string) Response {
 	return okResponse("")
 }
 
+func (s *Session) unset(args []string) Response {
+	if response := requireArity(args, 2); response != nil {
+		return *response
+	}
+	block, response := parseCoord(args)
+	if response != nil {
+		return *response
+	}
+	s.engine.mu.Lock()
+	defer s.engine.mu.Unlock()
+	mapping := s.engine.geometry.BlockToChunk(block)
+	chunk, found, err := s.readChunk(mapping.Chunk)
+	if err != nil {
+		return errorResponse("STORAGE", "read failed")
+	}
+	if !found {
+		return okResponse("")
+	}
+	if err := chunk.Unset(mapping.Offset); err != nil {
+		return errorResponse("STORAGE", "block update failed")
+	}
+	if err := s.engine.store.WriteChunk(mapping.Chunk, chunk); err != nil {
+		return errorResponse("STORAGE", "write failed")
+	}
+	return okResponse("")
+}
+
 func (s *Session) exists(args []string) Response {
 	if response := requireArity(args, 2); response != nil {
 		return *response
@@ -245,11 +274,11 @@ func (s *Session) exists(args []string) Response {
 	}
 	s.engine.mu.RLock()
 	defer s.engine.mu.RUnlock()
-	value, response := s.readBlock(block)
+	_, exists, response := s.readBlock(block)
 	if response != nil {
 		return *response
 	}
-	if value == 0 {
+	if !exists {
 		return okResponse("0")
 	}
 	return okResponse("1")
@@ -324,22 +353,27 @@ func (s *Session) chunkSet(args []string) Response {
 	return okResponse("")
 }
 
-func (s *Session) readBlock(block geometry.Coord) (uint64, *Response) {
+func (s *Session) readBlock(block geometry.Coord) (uint64, bool, *Response) {
 	mapping := s.engine.geometry.BlockToChunk(block)
 	chunk, found, err := s.readChunk(mapping.Chunk)
 	if err != nil {
 		response := errorResponse("STORAGE", "read failed")
-		return 0, &response
+		return 0, false, &response
 	}
 	if !found {
-		return 0, nil
+		return 0, false, nil
 	}
 	value, err := chunk.Get(mapping.Offset)
 	if err != nil {
 		response := errorResponse("STORAGE", "block read failed")
-		return 0, &response
+		return 0, false, &response
 	}
-	return value, nil
+	exists, err := chunk.Exists(mapping.Offset)
+	if err != nil {
+		response := errorResponse("STORAGE", "block presence read failed")
+		return 0, false, &response
+	}
+	return value, exists, nil
 }
 
 func (s *Session) readChunk(coord geometry.Coord) (*storage.Chunk, bool, error) {

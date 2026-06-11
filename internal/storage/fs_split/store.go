@@ -19,7 +19,8 @@ import (
 )
 
 const (
-	fileMagic            = "RGDBSPL1"
+	fileMagic            = "RGDBSPL2"
+	legacyFileMagic      = "RGDBSPL1"
 	headerBytes          = 44
 	checksumSize         = 4
 	chunkTemporaryPrefix = ".regiondb-chunk-"
@@ -265,13 +266,14 @@ func (s *Store) WriteChunk(coord geometry.Coord, chunk *storage.Chunk) error {
 	}
 
 	payload := chunk.Bytes()
-	record := s.appendWALRecord(s.walRecordBuffer[:0], coord, payload)
+	presence := chunk.PresenceBytes()
+	record := s.appendWALRecord(s.walRecordBuffer[:0], coord, payload, presence)
 	if err := s.appendWAL(record); err != nil {
 		return err
 	}
 	s.walRecordBuffer = record[:0]
 	syncCheckpoint := s.options.Durability == DurabilityFsyncCheckpoint
-	if err := s.persistChunk(coord, payload, syncCheckpoint); err != nil {
+	if err := s.persistChunk(coord, payload, presence, syncCheckpoint); err != nil {
 		return fmt.Errorf("persist chunk: %w", err)
 	}
 	s.walRecords++
@@ -281,7 +283,7 @@ func (s *Store) WriteChunk(coord geometry.Coord, chunk *storage.Chunk) error {
 			return err
 		}
 	}
-	if err := s.cache.put(coord, payload); err != nil {
+	if err := s.cache.putState(coord, payload, presence); err != nil {
 		return fmt.Errorf("cache written chunk: %w", err)
 	}
 	return nil
@@ -314,29 +316,32 @@ func (s *Store) ReadChunk(coord geometry.Coord) (chunk *storage.Chunk, returnErr
 		}
 	}()
 
-	expectedSize := int64(headerBytes) + int64(s.geometry.PayloadBytes()) + checksumSize
+	legacySize := int64(headerBytes) + int64(s.geometry.PayloadBytes()) + checksumSize
+	expectedSize := legacySize + int64(s.geometry.PresenceBytes())
 	info, err := file.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("stat chunk: %w", err)
 	}
-	if info.Size() != expectedSize {
-		return nil, fmt.Errorf("%w: file size is %d, want %d", ErrCorrupt, info.Size(), expectedSize)
+	if info.Size() != expectedSize && info.Size() != legacySize {
+		return nil, fmt.Errorf(
+			"%w: file size is %d, want %d or legacy size %d",
+			ErrCorrupt,
+			info.Size(),
+			expectedSize,
+			legacySize,
+		)
 	}
 
-	encoded := make([]byte, int(expectedSize))
+	encoded := make([]byte, int(info.Size()))
 	if _, err := io.ReadFull(file, encoded); err != nil {
 		return nil, fmt.Errorf("%w: read chunk: %v", ErrCorrupt, err)
 	}
-	payload, err := s.decode(coord, encoded)
+	chunk, err = s.decode(coord, encoded)
 	if err != nil {
 		return nil, err
 	}
-	chunk, err = storage.ChunkFromBytes(s.geometry, payload)
-	if err != nil {
-		return nil, fmt.Errorf("%w: decode payload: %v", ErrCorrupt, err)
-	}
 	if !s.options.ReadOnly {
-		if err := s.cache.put(coord, payload); err != nil {
+		if err := s.cache.putState(coord, chunk.Bytes(), chunk.PresenceBytes()); err != nil {
 			return nil, fmt.Errorf("cache read chunk: %w", err)
 		}
 	}
@@ -344,8 +349,16 @@ func (s *Store) ReadChunk(coord geometry.Coord) (chunk *storage.Chunk, returnErr
 }
 
 func (s *Store) encode(coord geometry.Coord, payload []byte) []byte {
+	presence := make([]byte, s.geometry.PresenceBytes())
+	for index := uint64(0); index < s.geometry.BlockCount(); index++ {
+		presence[index/8] |= byte(1 << (index % 8))
+	}
+	return s.encodeState(coord, payload, presence)
+}
+
+func (s *Store) encodeState(coord geometry.Coord, payload, presence []byte) []byte {
 	config := s.geometry.Config()
-	encoded := make([]byte, 0, headerBytes+len(payload)+checksumSize)
+	encoded := make([]byte, 0, headerBytes+len(payload)+len(presence)+checksumSize)
 	encoded = append(encoded, fileMagic...)
 	encoded = bitcodec.AppendUint32(encoded, config.ChunkEdge)
 	encoded = bitcodec.AppendUint32(encoded, config.LargeChunkEdge)
@@ -354,14 +367,16 @@ func (s *Store) encode(coord geometry.Coord, payload []byte) []byte {
 	encoded = bitcodec.AppendUint64(encoded, uint64(coord.Y))
 	encoded = bitcodec.AppendUint64(encoded, uint64(len(payload)))
 	encoded = append(encoded, payload...)
+	encoded = append(encoded, presence...)
 	return bitcodec.AppendUint32(encoded, crc32.ChecksumIEEE(encoded))
 }
 
-func (s *Store) decode(coord geometry.Coord, encoded []byte) ([]byte, error) {
+func (s *Store) decode(coord geometry.Coord, encoded []byte) (*storage.Chunk, error) {
 	if len(encoded) < headerBytes+checksumSize {
 		return nil, fmt.Errorf("%w: file is shorter than the header", ErrCorrupt)
 	}
-	if string(encoded[:len(fileMagic)]) != fileMagic {
+	magic := string(encoded[:len(fileMagic)])
+	if magic != fileMagic && magic != legacyFileMagic {
 		return nil, fmt.Errorf("%w: invalid magic", ErrCorrupt)
 	}
 	storedChecksum, err := bitcodec.Uint32(encoded[len(encoded)-checksumSize:])
@@ -409,7 +424,25 @@ func (s *Store) decode(coord geometry.Coord, encoded []byte) ([]byte, error) {
 		return nil, fmt.Errorf("%w: payload size is %d, want %d", ErrCorrupt, payloadSize, s.geometry.PayloadBytes())
 	}
 
-	return encoded[headerBytes : len(encoded)-checksumSize], nil
+	payloadEnd := headerBytes + s.geometry.PayloadBytes()
+	payload := encoded[headerBytes:payloadEnd]
+	var chunk *storage.Chunk
+	if magic == legacyFileMagic {
+		if len(encoded) != payloadEnd+checksumSize {
+			return nil, fmt.Errorf("%w: invalid legacy file size", ErrCorrupt)
+		}
+		chunk, err = storage.ChunkFromLegacyBytes(s.geometry, payload)
+	} else {
+		if len(encoded) != payloadEnd+s.geometry.PresenceBytes()+checksumSize {
+			return nil, fmt.Errorf("%w: invalid file size", ErrCorrupt)
+		}
+		presence := encoded[payloadEnd : len(encoded)-checksumSize]
+		chunk, err = storage.ChunkFromState(s.geometry, payload, presence)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: decode payload: %v", ErrCorrupt, err)
+	}
+	return chunk, nil
 }
 
 func (s *Store) chunkPath(coord geometry.Coord) string {
@@ -426,13 +459,13 @@ func signedName(value int64) string {
 	return "p" + strconv.FormatInt(value, 10)
 }
 
-func (s *Store) persistChunk(coord geometry.Coord, payload []byte, syncData bool) error {
+func (s *Store) persistChunk(coord geometry.Coord, payload, presence []byte, syncData bool) error {
 	path := s.chunkPath(coord)
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return fmt.Errorf("create large-chunk directory: %w", err)
 	}
-	if err := writeAtomic(path, s.encode(coord, payload), syncData, s.atomicWriteFailpoint); err != nil {
+	if err := writeAtomic(path, s.encodeState(coord, payload, presence), syncData, s.atomicWriteFailpoint); err != nil {
 		return err
 	}
 	return nil

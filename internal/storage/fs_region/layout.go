@@ -21,7 +21,7 @@ const (
 	FormatName = "fs_region_v1"
 	// FormatVersion is versioned separately from the production layout: an
 	// experimental image never claims fs_split_v1 compatibility.
-	FormatVersion uint32 = 1
+	FormatVersion uint32 = 2
 
 	imageMagic   = "RGDBRGN1"
 	imageSuffix  = ".rdbregion"
@@ -66,7 +66,10 @@ func newImageLayout(g geometry.Geometry) (imageLayout, error) {
 	if !ok {
 		return imageLayout{}, fmt.Errorf("%w: slot count overflows", ErrImageTooLarge)
 	}
-	slotBytes := uint64(g.PayloadBytes())
+	slotBytes, ok := checkedAdd(uint64(g.PayloadBytes()), uint64(g.PresenceBytes()))
+	if !ok {
+		return imageLayout{}, fmt.Errorf("%w: slot size overflows", ErrImageTooLarge)
+	}
 
 	bitmapBytes := slotCount / 8
 	if slotCount%8 != 0 {

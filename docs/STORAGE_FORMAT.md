@@ -30,7 +30,7 @@ stored as their two's-complement `uint64` representation.
 
 | Offset | Size | Field |
 |---:|---:|---|
-| 0 | 8 | ASCII magic `RGDBSPL1` |
+| 0 | 8 | ASCII magic `RGDBSPL2` |
 | 8 | 4 | `chunk_edge` |
 | 12 | 4 | `large_chunk_edge` |
 | 16 | 1 | `block_bits` |
@@ -39,10 +39,13 @@ stored as their two's-complement `uint64` representation.
 | 28 | 8 | Chunk Y coordinate |
 | 36 | 8 | Payload byte length |
 | 44 | variable | Packed regular-chunk payload |
+| 44 + `payload_bytes` | `ceil(chunk_edge * chunk_edge / 8)` | Block presence bitmap |
 | end - 4 | 4 | IEEE CRC-32 of every preceding byte |
 
-The exact file size is `44 + payload_bytes + 4`. Readers reject a wrong magic,
-size, checksum, coordinate, geometry, payload length, or nonzero reserved byte.
+The exact file size is
+`44 + payload_bytes + presence_bytes + 4`. Readers reject a wrong magic, size,
+checksum, coordinate, geometry, payload length, nonzero reserved byte, or
+nonzero unused high bit in the presence bitmap.
 
 ## Packed payload
 
@@ -56,6 +59,17 @@ chunks.
 `payload_bytes` is the checked ceiling of
 `chunk_edge * chunk_edge * block_bits / 8`.
 
+The presence bitmap uses block index `n` in bit `n % 8` of byte `n / 8`.
+Presence is independent of the packed value, so a present zero differs from an
+absent block. Clearing a block also zeroes its packed value. `CHUNKSET` imports
+an existing packed payload and marks every block present.
+
+Readers also accept the previous `RGDBSPL1` layout, whose exact size is
+`44 + payload_bytes + 4` and which has no presence bitmap. During migration,
+each nonzero legacy block is present and each zero legacy block is absent. The
+next write of that chunk publishes `RGDBSPL2`. Downgrading after a v2 chunk has
+been written requires restoring a backup created by the older version.
+
 ## Delta WAL
 
 The data directory contains `.regiondb.wal`. It is a sequence of fixed-size
@@ -63,7 +77,7 @@ records for the configured geometry. Each record contains:
 
 | Offset | Size | Field |
 |---:|---:|---|
-| 0 | 8 | ASCII magic `RGDBWAL1` |
+| 0 | 8 | ASCII magic `RGDBWAL2` |
 | 8 | 4 | `chunk_edge` |
 | 12 | 4 | `large_chunk_edge` |
 | 16 | 1 | `block_bits` |
@@ -71,15 +85,21 @@ records for the configured geometry. Each record contains:
 | 20 | 8 | Chunk X coordinate |
 | 28 | 8 | Chunk Y coordinate |
 | 36 | `payload_bytes` | Replacement packed chunk payload |
+| ... | `presence_bytes` | Replacement block presence bitmap |
 | end - 4 | 4 | IEEE CRC-32 of every preceding byte |
 
 Opening a store validates and replays complete records in order. If multiple
 records replace the same chunk, the last complete record determines its
 contents. Replaying those replacement records again produces the same result.
 A final partial record is treated as an interrupted append and discarded,
-whether the interruption occurs in its header, payload, or checksum. Invalid
-magic, geometry, reserved bytes, or checksum in a complete record fails closed
-with no replay.
+whether the interruption occurs in its header, payload, presence bitmap, or
+checksum. Invalid magic, geometry, reserved bytes, presence bits, or checksum
+in a complete record fails closed with no replay.
+
+Opening also accepts a WAL made entirely of fixed-size `RGDBWAL1` records.
+Legacy record presence is inferred with the same nonzero rule as legacy chunk
+files. Recovery validates and replays those records before replacing the WAL
+with an empty file; new records therefore never mix versions in one WAL.
 
 ## Writes, checkpoints, and durability
 

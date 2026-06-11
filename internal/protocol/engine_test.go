@@ -87,7 +87,13 @@ func TestSessionBlockAndChunkCommands(t *testing.T) {
 		{frame: "SET -1 0 7\r\n", want: "+OK\r\n"},
 		{frame: "GET -1 0\r\n", want: "$1\r\n7\r\n"},
 		{frame: "EXISTS -1 0\r\n", want: "+OK 1\r\n"},
-		{frame: "CHUNK -1 0\r\n", want: "$4\r\n3800\r\n"},
+		{frame: "SET -1 0 0\r\n", want: "+OK\r\n"},
+		{frame: "GET -1 0\r\n", want: "$1\r\n0\r\n"},
+		{frame: "EXISTS -1 0\r\n", want: "+OK 1\r\n"},
+		{frame: "UNSET -1 0\r\n", want: "+OK\r\n"},
+		{frame: "GET -1 0\r\n", want: "$1\r\n0\r\n"},
+		{frame: "EXISTS -1 0\r\n", want: "+OK 0\r\n"},
+		{frame: "CHUNK -1 0\r\n", want: "$4\r\n0000\r\n"},
 		{frame: "CHUNKSET 2 -3 4104\r\n", want: "+OK\r\n"},
 		{frame: "CHUNK 2 -3\r\n", want: "$4\r\n4104\r\n"},
 		{frame: "CHUNKBIN 2 -3\r\n", want: "$2\r\n\x41\x04\r\n"},
@@ -231,6 +237,7 @@ func TestSessionEnforcesCommandArity(t *testing.T) {
 		"INFO extra\r\n",
 		"GET 1\r\n",
 		"SET 1 2\r\n",
+		"UNSET 1\r\n",
 		"EXISTS 1 2 3\r\n",
 		"CHUNK 1\r\n",
 		"CHUNKBIN 1\r\n",
@@ -315,8 +322,10 @@ func TestSessionStorageErrors(t *testing.T) {
 	assertResponse(t, session, "GET 0 0\r\n", "-ERR STORAGE read failed\r\n")
 	assertResponse(t, session, "CHUNKBIN 0 0\r\n", "-ERR STORAGE read failed\r\n")
 	store.readErr = nil
+	assertResponse(t, session, "SET 0 0 1\r\n", "+OK\r\n")
 	store.writeErr = errors.New("write failure")
-	assertResponse(t, session, "SET 0 0 1\r\n", "-ERR STORAGE write failed\r\n")
+	assertResponse(t, session, "SET 0 0 2\r\n", "-ERR STORAGE write failed\r\n")
+	assertResponse(t, session, "UNSET 0 0\r\n", "-ERR STORAGE write failed\r\n")
 	assertResponse(t, session, "CHUNKSET 0 0 0000\r\n", "-ERR STORAGE write failed\r\n")
 }
 
@@ -404,14 +413,14 @@ func (s *memoryStore) ReadChunk(coord geometry.Coord) (*storage.Chunk, error) {
 	if !ok {
 		return nil, os.ErrNotExist
 	}
-	return storage.ChunkFromBytes(chunk.Geometry(), chunk.Bytes())
+	return storage.ChunkFromState(chunk.Geometry(), chunk.Bytes(), chunk.PresenceBytes())
 }
 
 func (s *memoryStore) WriteChunk(coord geometry.Coord, chunk *storage.Chunk) error {
 	if s.writeErr != nil {
 		return s.writeErr
 	}
-	cloned, err := storage.ChunkFromBytes(chunk.Geometry(), chunk.Bytes())
+	cloned, err := storage.ChunkFromState(chunk.Geometry(), chunk.Bytes(), chunk.PresenceBytes())
 	if err != nil {
 		return err
 	}

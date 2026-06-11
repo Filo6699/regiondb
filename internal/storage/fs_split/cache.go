@@ -12,6 +12,7 @@ import (
 type cacheEntry struct {
 	coord    geometry.Coord
 	payload  []byte
+	presence []byte
 	previous *cacheEntry
 	next     *cacheEntry
 }
@@ -92,7 +93,7 @@ func (cache *chunkCache) get(coord geometry.Coord) (*storage.Chunk, bool, error)
 	cache.hits.Add(1)
 	cache.recent.moveToFront(element)
 	entry := element
-	chunk, err := storage.ChunkFromBytes(cache.geometry, entry.payload)
+	chunk, err := storage.ChunkFromState(cache.geometry, entry.payload, entry.presence)
 	if err != nil {
 		return nil, false, err
 	}
@@ -100,12 +101,28 @@ func (cache *chunkCache) get(coord geometry.Coord) (*storage.Chunk, bool, error)
 }
 
 func (cache *chunkCache) put(coord geometry.Coord, payload []byte) error {
+	presence := make([]byte, cache.geometry.PresenceBytes())
+	for index := uint64(0); index < cache.geometry.BlockCount(); index++ {
+		presence[index/8] |= byte(1 << (index % 8))
+	}
+	return cache.putState(coord, payload, presence)
+}
+
+func (cache *chunkCache) putState(coord geometry.Coord, payload, presence []byte) error {
 	if len(payload) != cache.geometry.PayloadBytes() {
 		return fmt.Errorf(
 			"%w: got %d bytes, want %d",
 			storage.ErrPayloadSize,
 			len(payload),
 			cache.geometry.PayloadBytes(),
+		)
+	}
+	if len(presence) != cache.geometry.PresenceBytes() {
+		return fmt.Errorf(
+			"%w: got %d bytes, want %d",
+			storage.ErrPresenceSize,
+			len(presence),
+			cache.geometry.PresenceBytes(),
 		)
 	}
 
@@ -116,6 +133,7 @@ func (cache *chunkCache) put(coord geometry.Coord, payload []byte) error {
 		// The buffer of a resident entry is owned by the cache alone, so an
 		// update overwrites it in place instead of replacing the entry.
 		copy(element.payload, payload)
+		copy(element.presence, presence)
 		cache.recent.moveToFront(element)
 		return nil
 	}
@@ -124,6 +142,7 @@ func (cache *chunkCache) put(coord geometry.Coord, payload []byte) error {
 		delete(cache.entries, oldest.coord)
 		oldest.coord = coord
 		copy(oldest.payload, payload)
+		copy(oldest.presence, presence)
 		cache.recent.moveToFront(oldest)
 		cache.entries[coord] = oldest
 		cache.evictions.Add(1)
@@ -138,13 +157,15 @@ func (cache *chunkCache) put(coord geometry.Coord, payload []byte) error {
 		cache.recent.pushFront(element)
 	} else {
 		element = &cacheEntry{
-			payload: make([]byte, cache.geometry.PayloadBytes()),
+			payload:  make([]byte, cache.geometry.PayloadBytes()),
+			presence: make([]byte, cache.geometry.PresenceBytes()),
 		}
 		cache.recent.pushFront(element)
 	}
 	entry := element
 	entry.coord = coord
 	copy(entry.payload, payload)
+	copy(entry.presence, presence)
 	cache.entries[coord] = element
 	cache.loaded.Add(1)
 	return nil

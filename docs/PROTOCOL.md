@@ -55,18 +55,20 @@ All integers use decimal ASCII input without a leading plus sign. Coordinates
 are signed 64-bit integers. Block values are unsigned 64-bit integers and must
 fit the configured block width.
 
-`GET`, `SET`, and `EXISTS` take world block coordinates. `CHUNK`, `CHUNKBIN`,
-and `CHUNKSET` take regular-chunk coordinates. These coordinate spaces are
-distinct; the [project terminology](TERMINOLOGY.md) defines their names.
+`GET`, `SET`, `UNSET`, and `EXISTS` take world block coordinates. `CHUNK`,
+`CHUNKBIN`, and `CHUNKSET` take regular-chunk coordinates. These coordinate
+spaces are distinct; the [project terminology](TERMINOLOGY.md) defines their
+names.
 
 | Command | Response | Behavior |
 |---|---|---|
 | `AUTH token` | `+OK` or `-ERR AUTH ...` | Authenticate the connection. |
 | `PING` | `+OK PONG` | Check an authenticated session. |
 | `INFO` | Bulk runtime snapshot | Identify the server and report bounded runtime counters. |
-| `GET x y` | Bulk decimal value | Read a block; an absent chunk reads as zero. |
-| `SET x y value` | `+OK` | Persist one packed block value. |
-| `EXISTS x y` | `+OK 0` or `+OK 1` | Report whether the current block value is nonzero. |
+| `GET x y` | Bulk decimal value | Read a block; an absent block or chunk reads as zero. |
+| `SET x y value` | `+OK` | Persist one packed block value and mark the block present, including when the value is zero. |
+| `UNSET x y` | `+OK` | Mark a block absent and clear its packed value; unsetting a block in a missing chunk is idempotent. |
+| `EXISTS x y` | `+OK 0` or `+OK 1` | Report whether the block is present, independently of its value. |
 | `CHUNK x y` | Bulk lowercase hexadecimal payload | Read a packed regular chunk by chunk coordinate. |
 | `CHUNKBIN x y` | Bulk binary payload | Read the exact packed regular-chunk bytes without hexadecimal encoding. |
 | `CHUNKSET x y payload` | `+OK` | Persist a packed regular chunk from an exact-length hexadecimal payload. |
@@ -107,7 +109,10 @@ backend-defined keys are included.
 `CHUNK` and `CHUNKBIN` return `NOT_FOUND` when their chunk file is absent.
 Storage failures are reported with the `STORAGE` code. The binary byte count
 is the existing bulk response length; payload bytes may contain any value.
-The packed payload layout is defined in the
+These commands retain their version 1 packed-value payload and do not include
+the block presence bitmap. `CHUNKSET` therefore marks every imported block
+present, including zero-valued blocks. The packed payload layout and persisted
+presence bitmap are defined in the
 [storage format specification](STORAGE_FORMAT.md).
 
 The server rejects command lines larger than its configured `max_line_bytes`

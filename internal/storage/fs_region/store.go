@@ -127,7 +127,8 @@ func (s *Store) WriteChunk(coord geometry.Coord, chunk *storage.Chunk) error {
 	if err != nil {
 		return fmt.Errorf("open region image: %w", err)
 	}
-	if err := image.writeSlot(index, chunk.Bytes()); err != nil {
+	state := append(chunk.Bytes(), chunk.PresenceBytes()...)
+	if err := image.writeSlot(index, state); err != nil {
 		// A failed publication leaves the in-memory slot directory possibly ahead
 		// of the file, so the image is dropped and revalidated from disk on the
 		// next access instead of answering reads from unpublished state.
@@ -151,14 +152,15 @@ func (s *Store) ReadChunk(coord geometry.Coord) (*storage.Chunk, error) {
 		}
 		return nil, fmt.Errorf("open region image: %w", err)
 	}
-	payload, err := image.readSlot(index)
+	state, err := image.readSlot(index)
 	if err != nil {
 		if errors.Is(err, errSlotAbsent) {
 			return nil, absentChunkError(coord)
 		}
 		return nil, err
 	}
-	chunk, err := storage.ChunkFromBytes(s.geometry, payload)
+	payloadEnd := s.geometry.PayloadBytes()
+	chunk, err := storage.ChunkFromState(s.geometry, state[:payloadEnd], state[payloadEnd:])
 	if err != nil {
 		return nil, fmt.Errorf("%w: decode payload: %v", ErrCorrupt, err)
 	}

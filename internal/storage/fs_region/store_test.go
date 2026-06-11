@@ -25,6 +25,7 @@ func TestStoreReopenRoundTrip(t *testing.T) {
 		{X: 0, Y: 0}: 1,
 		{X: 2, Y: 0}: 31,
 		{X: 1, Y: 2}: 18,
+		{X: 2, Y: 2}: 0,
 	}
 	chunk := mustChunk(t, g)
 	for offset, value := range values {
@@ -51,6 +52,12 @@ func TestStoreReopenRoundTrip(t *testing.T) {
 		if got != want {
 			t.Fatalf("Get(%v) = %d, want %d", offset, got, want)
 		}
+		if exists, err := gotChunk.Exists(offset); err != nil || !exists {
+			t.Fatalf("Exists(%v) = %t, %v, want true", offset, exists, err)
+		}
+	}
+	if exists, err := gotChunk.Exists(geometry.Offset{X: 1, Y: 1}); err != nil || exists {
+		t.Fatalf("Exists(absent) = %t, %v, want false", exists, err)
 	}
 
 	// Chunk (-5,8) belongs to large chunk (-2,2) for a four-chunk region edge.

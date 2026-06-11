@@ -16,9 +16,10 @@ type Config struct {
 }
 
 type Geometry struct {
-	config       Config
-	blockCount   uint64
-	payloadBytes int
+	config        Config
+	blockCount    uint64
+	payloadBytes  int
+	presenceBytes int
 }
 
 type Coord struct {
@@ -67,11 +68,19 @@ func New(config Config) (Geometry, error) {
 	if payloadBytes > uint64(maxInt()) {
 		return Geometry{}, fmt.Errorf("%w: chunk payload is too large", ErrInvalid)
 	}
+	presenceBytes := blockCount / 8
+	if blockCount%8 != 0 {
+		presenceBytes++
+	}
+	if presenceBytes > uint64(maxInt()) {
+		return Geometry{}, fmt.Errorf("%w: chunk presence bitmap is too large", ErrInvalid)
+	}
 
 	return Geometry{
-		config:       config,
-		blockCount:   blockCount,
-		payloadBytes: int(payloadBytes),
+		config:        config,
+		blockCount:    blockCount,
+		payloadBytes:  int(payloadBytes),
+		presenceBytes: int(presenceBytes),
 	}, nil
 }
 
@@ -85,6 +94,10 @@ func (g Geometry) BlockCount() uint64 {
 
 func (g Geometry) PayloadBytes() int {
 	return g.payloadBytes
+}
+
+func (g Geometry) PresenceBytes() int {
+	return g.presenceBytes
 }
 
 func (g Geometry) BlockToChunk(block Coord) BlockMapping {

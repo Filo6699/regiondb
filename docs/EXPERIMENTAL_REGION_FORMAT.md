@@ -43,7 +43,7 @@ as their two's-complement `uint64` representation.
 | Offset | Size | Field |
 |---:|---:|---|
 | 0 | 8 | ASCII magic `RGDBRGN1` |
-| 8 | 4 | `format_version`, currently `1` |
+| 8 | 4 | `format_version`, currently `2` |
 | 12 | 4 | `chunk_edge` |
 | 16 | 4 | `large_chunk_edge` |
 | 20 | 1 | `block_bits` |
@@ -51,7 +51,7 @@ as their two's-complement `uint64` representation.
 | 24 | 8 | Region X coordinate |
 | 32 | 8 | Region Y coordinate |
 | 40 | 8 | `slot_count` |
-| 48 | 8 | `slot_bytes`, the packed payload size of one chunk |
+| 48 | 8 | `slot_bytes`, packed payload plus block presence bitmap |
 | 56 | 4 | IEEE CRC-32 of bytes 0 to 55 |
 | 60 | 4 | IEEE CRC-32 of the remaining slot directory |
 | 64 | `ceil(slot_count / 8)` | Presence bitmap, slot `n` in bit `n % 8` of byte `n / 8` |
@@ -64,8 +64,10 @@ area when it is created; on filesystems with sparse files the unwritten slots
 occupy no space. A geometry whose image would exceed 1 GiB is rejected when the
 store opens.
 
-Slot payloads use the same packed encoding and the same `payload_bytes`
-computation as `fs_split_v1`.
+Each slot stores the same packed values and block presence bitmap as
+`fs_split_v1`. Experimental version 1 images contained packed values only and
+are rejected rather than migrated because this backend has no compatibility
+promise.
 
 Readers reject a wrong magic, header checksum, format version, geometry, region
 coordinate, slot count, slot size, image size, slot directory checksum, or slot

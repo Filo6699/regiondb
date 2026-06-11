@@ -3,6 +3,7 @@ package fs_split
 import (
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"math"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Filo6699/regiondb/internal/bitcodec"
 	"github.com/Filo6699/regiondb/internal/geometry"
 	"github.com/Filo6699/regiondb/internal/storage"
 )
@@ -62,6 +64,117 @@ func TestStoreReopenRoundTrip(t *testing.T) {
 	}
 	if len(matches) != 0 {
 		t.Fatalf("temporary files remain after atomic write: %v", matches)
+	}
+}
+
+func TestStorePersistsExplicitZeroAndAbsentBlocks(t *testing.T) {
+	t.Parallel()
+
+	root := testTempDir(t)
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 2, LargeChunkEdge: 2, BlockBits: 3})
+	store := mustOpen(t, root, g)
+	coord := geometry.Coord{X: -2, Y: 4}
+	chunk := mustChunk(t, g)
+	explicitZero := geometry.Offset{X: 0, Y: 0}
+	nonzero := geometry.Offset{X: 1, Y: 0}
+	absent := geometry.Offset{X: 0, Y: 1}
+	if err := chunk.Set(explicitZero, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := chunk.Set(nonzero, 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteChunk(coord, chunk); err != nil {
+		t.Fatalf("WriteChunk(): %v", err)
+	}
+	closeStore(t, store)
+
+	reopened := mustOpen(t, root, g)
+	defer closeStore(t, reopened)
+	got, err := reopened.ReadChunk(coord)
+	if err != nil {
+		t.Fatalf("ReadChunk(): %v", err)
+	}
+	for _, test := range []struct {
+		offset geometry.Offset
+		want   bool
+	}{
+		{offset: explicitZero, want: true},
+		{offset: nonzero, want: true},
+		{offset: absent, want: false},
+	} {
+		exists, err := got.Exists(test.offset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if exists != test.want {
+			t.Fatalf("Exists(%v) = %t, want %t", test.offset, exists, test.want)
+		}
+	}
+}
+
+func TestStoreReadsLegacyChunkPresence(t *testing.T) {
+	t.Parallel()
+
+	root := testTempDir(t)
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 2, LargeChunkEdge: 2, BlockBits: 3})
+	store := mustOpen(t, root, g)
+	defer closeStore(t, store)
+	coord := geometry.Coord{X: 3, Y: -2}
+	payload := []byte{0x28, 0x00}
+	current := store.encode(coord, payload)
+	legacyEnd := headerBytes + len(payload)
+	legacy := append([]byte(nil), current[:legacyEnd]...)
+	copy(legacy[:len(legacyFileMagic)], legacyFileMagic)
+	legacy = bitcodec.AppendUint32(legacy, crc32.ChecksumIEEE(legacy))
+	path := store.chunkPath(coord)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.ReadChunk(coord)
+	if err != nil {
+		t.Fatalf("ReadChunk(legacy): %v", err)
+	}
+	if exists, err := got.Exists(geometry.Offset{}); err != nil || exists {
+		t.Fatalf("legacy zero Exists() = %t, %v, want false", exists, err)
+	}
+	if exists, err := got.Exists(geometry.Offset{X: 1}); err != nil || !exists {
+		t.Fatalf("legacy nonzero Exists() = %t, %v, want true", exists, err)
+	}
+}
+
+func TestStoreReplaysLegacyWALPresence(t *testing.T) {
+	t.Parallel()
+
+	root := testTempDir(t)
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 2, LargeChunkEdge: 2, BlockBits: 3})
+	coord := geometry.Coord{X: -7, Y: 6}
+	payload := []byte{0x28, 0x00}
+	encoder := &Store{geometry: g}
+	current := encoder.encodeWALRecord(coord, payload)
+	legacyEnd := walHeaderBytes + len(payload)
+	legacy := append([]byte(nil), current[:legacyEnd]...)
+	copy(legacy[:len(legacyWALMagic)], legacyWALMagic)
+	legacy = bitcodec.AppendUint32(legacy, crc32.ChecksumIEEE(legacy))
+	if err := os.WriteFile(filepath.Join(root, walName), legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store := mustOpen(t, root, g)
+	defer closeStore(t, store)
+	got, err := store.ReadChunk(coord)
+	if err != nil {
+		t.Fatalf("ReadChunk(replayed legacy WAL): %v", err)
+	}
+	if exists, err := got.Exists(geometry.Offset{}); err != nil || exists {
+		t.Fatalf("legacy WAL zero Exists() = %t, %v, want false", exists, err)
+	}
+	if exists, err := got.Exists(geometry.Offset{X: 1}); err != nil || !exists {
+		t.Fatalf("legacy WAL nonzero Exists() = %t, %v, want true", exists, err)
 	}
 }
 
@@ -876,7 +989,7 @@ func TestStoreLongWALCheckpointReopenCycles(t *testing.T) {
 		CheckpointBytes:   1 << 20,
 	}
 	coord := geometry.Coord{X: 12, Y: -7}
-	recordBytes := int64(walHeaderBytes + g.PayloadBytes() + checksumSize)
+	recordBytes := int64(walHeaderBytes + g.PayloadBytes() + g.PresenceBytes() + checksumSize)
 
 	for cycle := range cycles {
 		store := mustOpenWithOptions(t, root, g, options)
@@ -1013,7 +1126,7 @@ func TestStoreCheckpointByteHysteresis(t *testing.T) {
 	t.Parallel()
 
 	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 1})
-	recordBytes := int64(walHeaderBytes + g.PayloadBytes() + checksumSize)
+	recordBytes := int64(walHeaderBytes + g.PayloadBytes() + g.PresenceBytes() + checksumSize)
 	lowerBound := 2 * recordBytes
 	store := mustOpenWithOptions(t, testTempDir(t), g, Options{
 		CheckpointRecords: math.MaxUint64,
@@ -1277,7 +1390,7 @@ func TestStoreCacheEvictionSkipsLowValueWALCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat WAL after low-value eviction: %v", err)
 	}
-	recordBytes := int64(walHeaderBytes + g.PayloadBytes() + checksumSize)
+	recordBytes := int64(walHeaderBytes + g.PayloadBytes() + g.PresenceBytes() + checksumSize)
 	if want := int64(checkpointRecords-1) * recordBytes; info.Size() != want {
 		t.Fatalf("WAL size after low-value eviction = %d, want %d", info.Size(), want)
 	}

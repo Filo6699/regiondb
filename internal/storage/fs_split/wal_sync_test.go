@@ -136,7 +136,7 @@ func readWALRecords(t *testing.T, store *Store, path string) []walRecord {
 	if err != nil {
 		t.Fatalf("read WAL through an independent handle: %v", err)
 	}
-	recordBytes := walHeaderBytes + store.geometry.PayloadBytes() + checksumSize
+	recordBytes := walHeaderBytes + store.geometry.PayloadBytes() + store.geometry.PresenceBytes() + checksumSize
 	if len(encoded)%recordBytes != 0 {
 		t.Fatalf("WAL size %d is not a multiple of the %d byte record", len(encoded), recordBytes)
 	}

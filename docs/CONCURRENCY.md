@@ -31,8 +31,8 @@ The protocol engine uses one read/write mutex for all commands sharing that
 engine:
 
 - `GET`, `EXISTS`, and `CHUNK` hold a shared read lock;
-- `SET` and `CHUNKSET` hold an exclusive write lock across read-modify-write or
-  write operations.
+- `SET`, `UNSET`, and `CHUNKSET` hold an exclusive write lock across
+  read-modify-write or write operations.
 
 The `fs_split_v1` store also protects its methods with a store-wide read/write
 mutex. Reads may overlap other reads. A write excludes reads and other writes

@@ -11,11 +11,13 @@ import (
 
 	"github.com/Filo6699/regiondb/internal/bitcodec"
 	"github.com/Filo6699/regiondb/internal/geometry"
+	"github.com/Filo6699/regiondb/internal/storage"
 )
 
 const (
 	walName        = ".regiondb.wal"
-	walMagic       = "RGDBWAL1"
+	walMagic       = "RGDBWAL2"
+	legacyWALMagic = "RGDBWAL1"
 	walHeaderBytes = 36
 )
 
@@ -39,8 +41,9 @@ const (
 )
 
 type walRecord struct {
-	coord   geometry.Coord
-	payload []byte
+	coord    geometry.Coord
+	payload  []byte
+	presence []byte
 }
 
 func (s *Store) appendWAL(record []byte) error {
@@ -115,12 +118,16 @@ func (s *Store) recordWALFlush(kind walFlushKind) {
 }
 
 func (s *Store) encodeWALRecord(coord geometry.Coord, payload []byte) []byte {
-	return s.appendWALRecord(nil, coord, payload)
+	presence := make([]byte, s.geometry.PresenceBytes())
+	for index := uint64(0); index < s.geometry.BlockCount(); index++ {
+		presence[index/8] |= byte(1 << (index % 8))
+	}
+	return s.appendWALRecord(nil, coord, payload, presence)
 }
 
-func (s *Store) appendWALRecord(encoded []byte, coord geometry.Coord, payload []byte) []byte {
+func (s *Store) appendWALRecord(encoded []byte, coord geometry.Coord, payload, presence []byte) []byte {
 	config := s.geometry.Config()
-	recordBytes := walHeaderBytes + len(payload) + checksumSize
+	recordBytes := walHeaderBytes + len(payload) + len(presence) + checksumSize
 	if cap(encoded) < recordBytes {
 		encoded = make([]byte, 0, recordBytes)
 	}
@@ -131,11 +138,13 @@ func (s *Store) appendWALRecord(encoded []byte, coord geometry.Coord, payload []
 	encoded = bitcodec.AppendUint64(encoded, uint64(coord.X))
 	encoded = bitcodec.AppendUint64(encoded, uint64(coord.Y))
 	encoded = append(encoded, payload...)
+	encoded = append(encoded, presence...)
 	return bitcodec.AppendUint32(encoded, crc32.ChecksumIEEE(encoded))
 }
 
 func (s *Store) decodeWALRecord(encoded []byte) (walRecord, error) {
-	if string(encoded[:len(walMagic)]) != walMagic {
+	magic := string(encoded[:len(walMagic)])
+	if magic != walMagic && magic != legacyWALMagic {
 		return walRecord{}, fmt.Errorf("%w: invalid record magic", ErrCorruptWAL)
 	}
 	storedChecksum, err := bitcodec.Uint32(encoded[len(encoded)-checksumSize:])
@@ -168,9 +177,25 @@ func (s *Store) decodeWALRecord(encoded []byte) (walRecord, error) {
 	if err != nil {
 		return walRecord{}, fmt.Errorf("%w: read chunk y coordinate: %v", ErrCorruptWAL, err)
 	}
+	payloadEnd := walHeaderBytes + s.geometry.PayloadBytes()
+	payload := encoded[walHeaderBytes:payloadEnd]
+	var presence []byte
+	if magic == legacyWALMagic {
+		chunk, err := storage.ChunkFromLegacyBytes(s.geometry, payload)
+		if err != nil {
+			return walRecord{}, fmt.Errorf("%w: decode legacy payload: %v", ErrCorruptWAL, err)
+		}
+		presence = chunk.PresenceBytes()
+	} else {
+		presence = encoded[payloadEnd : len(encoded)-checksumSize]
+		if _, err := storage.ChunkFromState(s.geometry, payload, presence); err != nil {
+			return walRecord{}, fmt.Errorf("%w: decode payload: %v", ErrCorruptWAL, err)
+		}
+	}
 	return walRecord{
-		coord:   geometry.Coord{X: int64(x), Y: int64(y)},
-		payload: append([]byte(nil), encoded[walHeaderBytes:len(encoded)-checksumSize]...),
+		coord:    geometry.Coord{X: int64(x), Y: int64(y)},
+		payload:  append([]byte(nil), payload...),
+		presence: append([]byte(nil), presence...),
 	}, nil
 }
 
@@ -188,9 +213,29 @@ func (s *Store) scanWAL(visit func(walRecord) error) (int64, uint64, error) {
 	if err != nil {
 		return 0, 0, fmt.Errorf("stat WAL: %w", err)
 	}
-	recordBytes := walHeaderBytes + s.geometry.PayloadBytes() + checksumSize
+	legacyRecordBytes := walHeaderBytes + s.geometry.PayloadBytes() + checksumSize
+	recordBytes := legacyRecordBytes + s.geometry.PresenceBytes()
 	if recordBytes < walHeaderBytes+checksumSize {
 		return 0, 0, fmt.Errorf("%w: record size overflow", ErrCorruptWAL)
+	}
+	if info.Size() >= int64(len(walMagic)) {
+		magic := make([]byte, len(walMagic))
+		if _, err := io.ReadFull(wal, magic); err != nil {
+			return 0, 0, fmt.Errorf("read WAL magic: %w", err)
+		}
+		switch string(magic) {
+		case walMagic:
+		case legacyWALMagic:
+			recordBytes = legacyRecordBytes
+		default:
+			if info.Size() < int64(legacyRecordBytes) {
+				return 0, 0, nil
+			}
+			return 0, 0, fmt.Errorf("%w: invalid record magic", ErrCorruptWAL)
+		}
+		if _, err := wal.Seek(0, io.SeekStart); err != nil {
+			return 0, 0, fmt.Errorf("rewind WAL after magic: %w", err)
+		}
 	}
 	completeBytes := info.Size() / int64(recordBytes) * int64(recordBytes)
 	encoded := make([]byte, recordBytes)
@@ -223,7 +268,7 @@ func (s *Store) recoverWAL() error {
 	}
 	syncData := s.options.Durability != DurabilityRelaxed
 	if _, _, err := s.scanWAL(func(record walRecord) error {
-		if err := s.persistChunk(record.coord, record.payload, syncData); err != nil {
+		if err := s.persistChunk(record.coord, record.payload, record.presence, syncData); err != nil {
 			return fmt.Errorf("replay WAL record: %w", err)
 		}
 		s.cache.remove(record.coord)
@@ -305,7 +350,7 @@ func (s *Store) checkpointWAL() error {
 	syncData := s.options.Durability != DurabilityRelaxed
 	if syncData {
 		_, _, err := s.scanWAL(func(record walRecord) error {
-			if err := s.persistChunk(record.coord, record.payload, true); err != nil {
+			if err := s.persistChunk(record.coord, record.payload, record.presence, true); err != nil {
 				return fmt.Errorf("checkpoint WAL record: %w", err)
 			}
 			return nil
