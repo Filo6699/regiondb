@@ -84,7 +84,9 @@ func TestSessionBlockAndChunkCommands(t *testing.T) {
 	}{
 		{frame: "GET -1 0\r\n", want: "$1\r\n0\r\n"},
 		{frame: "EXISTS -1 0\r\n", want: "+OK 0\r\n"},
+		{frame: "CHUNKEXISTS -1 0\r\n", want: "+OK 0\r\n"},
 		{frame: "SET -1 0 7\r\n", want: "+OK\r\n"},
+		{frame: "CHUNKEXISTS -1 0\r\n", want: "+OK 1\r\n"},
 		{frame: "GET -1 0\r\n", want: "$1\r\n7\r\n"},
 		{frame: "EXISTS -1 0\r\n", want: "+OK 1\r\n"},
 		{frame: "SET -1 0 0\r\n", want: "+OK\r\n"},
@@ -93,8 +95,10 @@ func TestSessionBlockAndChunkCommands(t *testing.T) {
 		{frame: "UNSET -1 0\r\n", want: "+OK\r\n"},
 		{frame: "GET -1 0\r\n", want: "$1\r\n0\r\n"},
 		{frame: "EXISTS -1 0\r\n", want: "+OK 0\r\n"},
+		{frame: "CHUNKEXISTS -1 0\r\n", want: "+OK 1\r\n"},
 		{frame: "CHUNK -1 0\r\n", want: "$4\r\n0000\r\n"},
 		{frame: "CHUNKSET 2 -3 4104\r\n", want: "+OK\r\n"},
+		{frame: "CHUNKEXISTS 2 -3\r\n", want: "+OK 1\r\n"},
 		{frame: "CHUNK 2 -3\r\n", want: "$4\r\n4104\r\n"},
 		{frame: "CHUNKBIN 2 -3\r\n", want: "$2\r\n\x41\x04\r\n"},
 		{frame: "GET 4 -6\r\n", want: "$1\r\n1\r\n"},
@@ -241,6 +245,7 @@ func TestSessionEnforcesCommandArity(t *testing.T) {
 		"EXISTS 1 2 3\r\n",
 		"CHUNK 1\r\n",
 		"CHUNKBIN 1\r\n",
+		"CHUNKEXISTS 1\r\n",
 		"CHUNKSET 1 2\r\n",
 		"QUIT extra\r\n",
 	}
@@ -321,6 +326,7 @@ func TestSessionStorageErrors(t *testing.T) {
 	store.readErr = errors.New("read failure")
 	assertResponse(t, session, "GET 0 0\r\n", "-ERR STORAGE read failed\r\n")
 	assertResponse(t, session, "CHUNKBIN 0 0\r\n", "-ERR STORAGE read failed\r\n")
+	assertResponse(t, session, "CHUNKEXISTS 0 0\r\n", "-ERR STORAGE read failed\r\n")
 	store.readErr = nil
 	assertResponse(t, session, "SET 0 0 1\r\n", "+OK\r\n")
 	store.writeErr = errors.New("write failure")

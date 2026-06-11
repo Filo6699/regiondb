@@ -126,6 +126,8 @@ func (s *Session) Execute(command Command) Response {
 		return s.chunk(command.Args)
 	case "CHUNKBIN":
 		return s.chunkBinary(command.Args)
+	case "CHUNKEXISTS":
+		return s.chunkExists(command.Args)
 	case "CHUNKSET":
 		return s.chunkSet(command.Args)
 	default:
@@ -301,6 +303,26 @@ func (s *Session) chunkBinary(args []string) Response {
 		return *response
 	}
 	return bulkResponse(chunk.Bytes())
+}
+
+func (s *Session) chunkExists(args []string) Response {
+	if response := requireArity(args, 2); response != nil {
+		return *response
+	}
+	coord, response := parseCoord(args)
+	if response != nil {
+		return *response
+	}
+	s.engine.mu.RLock()
+	defer s.engine.mu.RUnlock()
+	_, found, err := s.readChunk(coord)
+	if err != nil {
+		return errorResponse("STORAGE", "read failed")
+	}
+	if !found {
+		return okResponse("0")
+	}
+	return okResponse("1")
 }
 
 func (s *Session) readChunkCommand(args []string) (*storage.Chunk, *Response) {

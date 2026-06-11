@@ -30,7 +30,7 @@ warnings.
 The protocol engine uses one read/write mutex for all commands sharing that
 engine:
 
-- `GET`, `EXISTS`, and `CHUNK` hold a shared read lock;
+- `GET`, `EXISTS`, `CHUNK`, and `CHUNKEXISTS` hold a shared read lock;
 - `SET`, `UNSET`, and `CHUNKSET` hold an exclusive write lock across
   read-modify-write or write operations.
 

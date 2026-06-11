@@ -56,9 +56,9 @@ are signed 64-bit integers. Block values are unsigned 64-bit integers and must
 fit the configured block width.
 
 `GET`, `SET`, `UNSET`, and `EXISTS` take world block coordinates. `CHUNK`,
-`CHUNKBIN`, and `CHUNKSET` take regular-chunk coordinates. These coordinate
-spaces are distinct; the [project terminology](TERMINOLOGY.md) defines their
-names.
+`CHUNKBIN`, `CHUNKEXISTS`, and `CHUNKSET` take regular-chunk coordinates. These
+coordinate spaces are distinct; the [project terminology](TERMINOLOGY.md)
+defines their names.
 
 | Command | Response | Behavior |
 |---|---|---|
@@ -71,6 +71,7 @@ names.
 | `EXISTS x y` | `+OK 0` or `+OK 1` | Report whether the block is present, independently of its value. |
 | `CHUNK x y` | Bulk lowercase hexadecimal payload | Read a packed regular chunk by chunk coordinate. |
 | `CHUNKBIN x y` | Bulk binary payload | Read the exact packed regular-chunk bytes without hexadecimal encoding. |
+| `CHUNKEXISTS x y` | `+OK 0` or `+OK 1` | Report whether the chunk exists independently of block presence. |
 | `CHUNKSET x y payload` | `+OK` | Persist a packed regular chunk from an exact-length hexadecimal payload. |
 | `QUIT` | `+OK` | Close the session after the response. |
 
@@ -107,8 +108,10 @@ reopens the store. Gauges may increase or decrease. No unbounded or
 backend-defined keys are included.
 
 `CHUNK` and `CHUNKBIN` return `NOT_FOUND` when their chunk file is absent.
-Storage failures are reported with the `STORAGE` code. The binary byte count
-is the existing bulk response length; payload bytes may contain any value.
+`CHUNKEXISTS` reports `1` for any persisted chunk, including one whose block
+presence bitmap is empty, and `0` for a missing chunk. Storage failures are
+reported with the `STORAGE` code. The binary byte count is the existing bulk
+response length; payload bytes may contain any value.
 These commands retain their version 1 packed-value payload and do not include
 the block presence bitmap. `CHUNKSET` therefore marks every imported block
 present, including zero-valued blocks. The packed payload layout and persisted
