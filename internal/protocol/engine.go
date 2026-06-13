@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/Filo6699/regiondb/internal/bitcodec"
@@ -287,20 +288,40 @@ func (s *Session) exists(args []string) Response {
 }
 
 func (s *Session) chunk(args []string) Response {
-	chunk, response := s.readChunkCommand(args)
+	state, response := parseChunkReadMode(args)
+	if response != nil {
+		return *response
+	}
+	chunk, response := s.readChunkCommand(args[:2])
 	if response != nil {
 		return *response
 	}
 	payload := chunk.Bytes()
+	if state {
+		presence := chunk.PresenceBytes()
+		encoded := make([]byte, hex.EncodedLen(len(payload))+1+hex.EncodedLen(len(presence)))
+		payloadEnd := hex.Encode(encoded, payload)
+		encoded[payloadEnd] = '|'
+		hex.Encode(encoded[payloadEnd+1:], presence)
+		return bulkResponse(encoded)
+	}
 	encoded := make([]byte, hex.EncodedLen(len(payload)))
 	hex.Encode(encoded, payload)
 	return bulkResponse(encoded)
 }
 
 func (s *Session) chunkBinary(args []string) Response {
-	chunk, response := s.readChunkCommand(args)
+	state, response := parseChunkReadMode(args)
 	if response != nil {
 		return *response
+	}
+	chunk, response := s.readChunkCommand(args[:2])
+	if response != nil {
+		return *response
+	}
+	if state {
+		payload := chunk.Bytes()
+		return bulkResponse(append(payload, chunk.PresenceBytes()...))
 	}
 	return bulkResponse(chunk.Bytes())
 }
@@ -348,9 +369,20 @@ func (s *Session) readChunkCommand(args []string) (*storage.Chunk, *Response) {
 }
 
 func (s *Session) chunkSet(args []string) Response {
-	if response := requireArity(args, 3); response != nil {
-		return *response
+	switch len(args) {
+	case 3:
+		return s.writeChunkPayload(args)
+	case 4:
+		if args[2] != "STATE" {
+			return errorResponse("MODE", "chunk mode must be STATE")
+		}
+		return s.writeChunkState(args)
+	default:
+		return errorResponse("ARITY", "wrong number of arguments")
 	}
+}
+
+func (s *Session) writeChunkPayload(args []string) Response {
 	coord, response := parseCoord(args[:2])
 	if response != nil {
 		return *response
@@ -373,6 +405,82 @@ func (s *Session) chunkSet(args []string) Response {
 		return errorResponse("STORAGE", "write failed")
 	}
 	return okResponse("")
+}
+
+func (s *Session) writeChunkState(args []string) Response {
+	coord, response := parseCoord(args[:2])
+	if response != nil {
+		return *response
+	}
+	payloadText, presenceText, found := strings.Cut(args[3], "|")
+	if !found || strings.Contains(presenceText, "|") {
+		return errorResponse("PAYLOAD", "packed chunk state must be payload|presence")
+	}
+	payloadBytes := s.engine.geometry.PayloadBytes()
+	presenceBytes := s.engine.geometry.PresenceBytes()
+	if payloadBytes > int(^uint(0)>>1)/2 ||
+		presenceBytes > int(^uint(0)>>1)/2 ||
+		len(payloadText) != hex.EncodedLen(payloadBytes) ||
+		len(presenceText) != hex.EncodedLen(presenceBytes) {
+		return errorResponse("PAYLOAD", "packed chunk state has an invalid length")
+	}
+	payload := make([]byte, payloadBytes)
+	if _, err := hex.Decode(payload, []byte(payloadText)); err != nil {
+		return errorResponse("PAYLOAD", "packed chunk payload must be hexadecimal")
+	}
+	payloadBits := s.engine.geometry.BlockCount() * uint64(s.engine.geometry.Config().BlockBits)
+	if unused := uint64(payloadBytes)*8 - payloadBits; unused != 0 {
+		mask := byte(0xff >> unused)
+		if payload[len(payload)-1]&^mask != 0 {
+			return errorResponse("PAYLOAD", "packed chunk state is invalid")
+		}
+	}
+	presence := make([]byte, presenceBytes)
+	if _, err := hex.Decode(presence, []byte(presenceText)); err != nil {
+		return errorResponse("PAYLOAD", "chunk presence bitmap must be hexadecimal")
+	}
+	chunk, err := storage.ChunkFromState(s.engine.geometry, payload, presence)
+	if err != nil {
+		return errorResponse("PAYLOAD", "packed chunk state is invalid")
+	}
+	edge := uint64(s.engine.geometry.Config().ChunkEdge)
+	for index := range s.engine.geometry.BlockCount() {
+		offset := geometry.Offset{
+			X: uint32(index % edge),
+			Y: uint32(index / edge),
+		}
+		exists, err := chunk.Exists(offset)
+		if err != nil {
+			return errorResponse("PAYLOAD", "packed chunk state is invalid")
+		}
+		if !exists {
+			if err := chunk.Unset(offset); err != nil {
+				return errorResponse("PAYLOAD", "packed chunk state is invalid")
+			}
+		}
+	}
+	s.engine.mu.Lock()
+	defer s.engine.mu.Unlock()
+	if err := s.engine.store.WriteChunk(coord, chunk); err != nil {
+		return errorResponse("STORAGE", "write failed")
+	}
+	return okResponse("")
+}
+
+func parseChunkReadMode(args []string) (bool, *Response) {
+	switch len(args) {
+	case 2:
+		return false, nil
+	case 3:
+		if args[2] == "STATE" {
+			return true, nil
+		}
+		response := errorResponse("MODE", "chunk mode must be STATE")
+		return false, &response
+	default:
+		response := errorResponse("ARITY", "wrong number of arguments")
+		return false, &response
+	}
 }
 
 func (s *Session) readBlock(block geometry.Coord) (uint64, bool, *Response) {

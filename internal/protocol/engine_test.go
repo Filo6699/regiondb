@@ -97,16 +97,33 @@ func TestSessionBlockAndChunkCommands(t *testing.T) {
 		{frame: "EXISTS -1 0\r\n", want: "+OK 0\r\n"},
 		{frame: "CHUNKEXISTS -1 0\r\n", want: "+OK 1\r\n"},
 		{frame: "CHUNK -1 0\r\n", want: "$4\r\n0000\r\n"},
+		{frame: "CHUNK -1 0 STATE\r\n", want: "$7\r\n0000|00\r\n"},
+		{frame: "CHUNKBIN -1 0 STATE\r\n", want: "$3\r\n\x00\x00\x00\r\n"},
 		{frame: "CHUNKSET 2 -3 4104\r\n", want: "+OK\r\n"},
 		{frame: "CHUNKEXISTS 2 -3\r\n", want: "+OK 1\r\n"},
 		{frame: "CHUNK 2 -3\r\n", want: "$4\r\n4104\r\n"},
+		{frame: "CHUNK 2 -3 STATE\r\n", want: "$7\r\n4104|0f\r\n"},
 		{frame: "CHUNKBIN 2 -3\r\n", want: "$2\r\n\x41\x04\r\n"},
+		{frame: "CHUNKBIN 2 -3 STATE\r\n", want: "$3\r\n\x41\x04\x0f\r\n"},
 		{frame: "GET 4 -6\r\n", want: "$1\r\n1\r\n"},
 		{frame: "GET 5 -6\r\n", want: "$1\r\n0\r\n"},
 		{frame: "GET 4 -5\r\n", want: "$1\r\n1\r\n"},
 		{frame: "GET 5 -5\r\n", want: "$1\r\n2\r\n"},
+		{frame: "CHUNKSET 3 -3 STATE 4104|05\r\n", want: "+OK\r\n"},
+		{frame: "CHUNK 3 -3 STATE\r\n", want: "$7\r\n4100|05\r\n"},
+		{frame: "CHUNKBIN 3 -3 STATE\r\n", want: "$3\r\n\x41\x00\x05\r\n"},
+		{frame: "GET 6 -6\r\n", want: "$1\r\n1\r\n"},
+		{frame: "EXISTS 6 -6\r\n", want: "+OK 1\r\n"},
+		{frame: "GET 7 -6\r\n", want: "$1\r\n0\r\n"},
+		{frame: "EXISTS 7 -6\r\n", want: "+OK 0\r\n"},
+		{frame: "GET 6 -5\r\n", want: "$1\r\n1\r\n"},
+		{frame: "EXISTS 6 -5\r\n", want: "+OK 1\r\n"},
+		{frame: "GET 7 -5\r\n", want: "$1\r\n0\r\n"},
+		{frame: "EXISTS 7 -5\r\n", want: "+OK 0\r\n"},
 		{frame: "CHUNK 99 99\r\n", want: "-ERR NOT_FOUND chunk does not exist\r\n"},
+		{frame: "CHUNK 99 99 STATE\r\n", want: "-ERR NOT_FOUND chunk does not exist\r\n"},
 		{frame: "CHUNKBIN 99 99\r\n", want: "-ERR NOT_FOUND chunk does not exist\r\n"},
+		{frame: "CHUNKBIN 99 99 STATE\r\n", want: "-ERR NOT_FOUND chunk does not exist\r\n"},
 	}
 
 	for _, test := range tests {
@@ -155,6 +172,36 @@ func TestSessionInfoRuntimeCounters(t *testing.T) {
 			"wal_eviction_flushes=1\nwal_checkpoint_flushes=2\n"+
 			"open_wal_handles=8\ncheckpoints=7\n\r\n",
 	)
+}
+
+func TestSessionChunkStateWriteIsAtomic(t *testing.T) {
+	t.Parallel()
+
+	g := testGeometry(t)
+	store := &memoryStore{chunks: make(map[geometry.Coord]*storage.Chunk)}
+	engine, err := NewEngine(g, store, "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := engine.NewSession()
+	assertResponse(t, session, "AUTH test-token\r\n", "+OK\r\n")
+
+	assertResponse(t, session, "CHUNKSET 1 2 STATE 4104|05\r\n", "+OK\r\n")
+	if store.writeCount != 1 {
+		t.Fatalf("WriteChunk() calls = %d, want 1", store.writeCount)
+	}
+	assertResponse(t, session, "CHUNK 1 2 STATE\r\n", "$7\r\n4100|05\r\n")
+
+	assertResponse(
+		t,
+		session,
+		"CHUNKSET 1 2 STATE ffff|10\r\n",
+		"-ERR PAYLOAD packed chunk state is invalid\r\n",
+	)
+	if store.writeCount != 1 {
+		t.Fatalf("WriteChunk() calls after invalid state = %d, want 1", store.writeCount)
+	}
+	assertResponse(t, session, "CHUNK 1 2 STATE\r\n", "$7\r\n4100|05\r\n")
 }
 
 func TestSessionRejectsInvalidCommands(t *testing.T) {
@@ -212,6 +259,61 @@ func TestSessionRejectsInvalidCommands(t *testing.T) {
 			name:  "chunk payload encoding",
 			frame: "CHUNKSET 0 0 zzzz\r\n",
 			want:  "-ERR PAYLOAD packed chunk must be hexadecimal\r\n",
+		},
+		{
+			name:  "chunk text mode",
+			frame: "CHUNK 0 0 OTHER\r\n",
+			want:  "-ERR MODE chunk mode must be STATE\r\n",
+		},
+		{
+			name:  "chunk binary mode",
+			frame: "CHUNKBIN 0 0 OTHER\r\n",
+			want:  "-ERR MODE chunk mode must be STATE\r\n",
+		},
+		{
+			name:  "chunk state mode",
+			frame: "CHUNKSET 0 0 OTHER 0000|00\r\n",
+			want:  "-ERR MODE chunk mode must be STATE\r\n",
+		},
+		{
+			name:  "chunk state separator",
+			frame: "CHUNKSET 0 0 STATE 000000\r\n",
+			want:  "-ERR PAYLOAD packed chunk state must be payload|presence\r\n",
+		},
+		{
+			name:  "chunk state duplicate separator",
+			frame: "CHUNKSET 0 0 STATE 0000|00|00\r\n",
+			want:  "-ERR PAYLOAD packed chunk state must be payload|presence\r\n",
+		},
+		{
+			name:  "chunk state payload length",
+			frame: "CHUNKSET 0 0 STATE 00|00\r\n",
+			want:  "-ERR PAYLOAD packed chunk state has an invalid length\r\n",
+		},
+		{
+			name:  "chunk state presence length",
+			frame: "CHUNKSET 0 0 STATE 0000|0000\r\n",
+			want:  "-ERR PAYLOAD packed chunk state has an invalid length\r\n",
+		},
+		{
+			name:  "chunk state payload encoding",
+			frame: "CHUNKSET 0 0 STATE zzzz|00\r\n",
+			want:  "-ERR PAYLOAD packed chunk payload must be hexadecimal\r\n",
+		},
+		{
+			name:  "chunk state presence encoding",
+			frame: "CHUNKSET 0 0 STATE 0000|zz\r\n",
+			want:  "-ERR PAYLOAD chunk presence bitmap must be hexadecimal\r\n",
+		},
+		{
+			name:  "chunk state unused payload bits",
+			frame: "CHUNKSET 0 0 STATE 00f0|0f\r\n",
+			want:  "-ERR PAYLOAD packed chunk state is invalid\r\n",
+		},
+		{
+			name:  "chunk state unused presence bits",
+			frame: "CHUNKSET 0 0 STATE 0000|10\r\n",
+			want:  "-ERR PAYLOAD packed chunk state is invalid\r\n",
 		},
 		{
 			name:  "unknown command",
@@ -333,6 +435,7 @@ func TestSessionStorageErrors(t *testing.T) {
 	assertResponse(t, session, "SET 0 0 2\r\n", "-ERR STORAGE write failed\r\n")
 	assertResponse(t, session, "UNSET 0 0\r\n", "-ERR STORAGE write failed\r\n")
 	assertResponse(t, session, "CHUNKSET 0 0 0000\r\n", "-ERR STORAGE write failed\r\n")
+	assertResponse(t, session, "CHUNKSET 0 0 STATE 0000|01\r\n", "-ERR STORAGE write failed\r\n")
 }
 
 func TestSessionQuit(t *testing.T) {
@@ -401,10 +504,11 @@ func assertResponse(t *testing.T, session *Session, frame, want string) {
 }
 
 type memoryStore struct {
-	chunks   map[geometry.Coord]*storage.Chunk
-	readErr  error
-	writeErr error
-	stats    storage.RuntimeStats
+	chunks     map[geometry.Coord]*storage.Chunk
+	readErr    error
+	writeErr   error
+	stats      storage.RuntimeStats
+	writeCount int
 }
 
 func (s *memoryStore) RuntimeStats() storage.RuntimeStats {
@@ -431,5 +535,6 @@ func (s *memoryStore) WriteChunk(coord geometry.Coord, chunk *storage.Chunk) err
 		return err
 	}
 	s.chunks[coord] = cloned
+	s.writeCount++
 	return nil
 }

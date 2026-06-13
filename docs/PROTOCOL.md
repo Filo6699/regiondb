@@ -56,9 +56,10 @@ are signed 64-bit integers. Block values are unsigned 64-bit integers and must
 fit the configured block width.
 
 `GET`, `SET`, `UNSET`, and `EXISTS` take world block coordinates. `CHUNK`,
-`CHUNKBIN`, `CHUNKEXISTS`, and `CHUNKSET` take regular-chunk coordinates. These
-coordinate spaces are distinct; the [project terminology](TERMINOLOGY.md)
-defines their names.
+`CHUNKBIN`, `CHUNKEXISTS`, and `CHUNKSET` take regular-chunk coordinates.
+`CHUNK`, `CHUNKBIN`, and `CHUNKSET` also have the exact-state forms shown
+below. These coordinate spaces are distinct; the
+[project terminology](TERMINOLOGY.md) defines their names.
 
 | Command | Response | Behavior |
 |---|---|---|
@@ -70,9 +71,12 @@ defines their names.
 | `UNSET x y` | `+OK` | Mark a block absent and clear its packed value; unsetting a block in a missing chunk is idempotent. |
 | `EXISTS x y` | `+OK 0` or `+OK 1` | Report whether the block is present, independently of its value. |
 | `CHUNK x y` | Bulk lowercase hexadecimal payload | Read a packed regular chunk by chunk coordinate. |
+| `CHUNK x y STATE` | Bulk `payload\|presence` | Read the packed payload and exact packed presence bitmap as lowercase hexadecimal. |
 | `CHUNKBIN x y` | Bulk binary payload | Read the exact packed regular-chunk bytes without hexadecimal encoding. |
+| `CHUNKBIN x y STATE` | Bulk binary state | Read the payload bytes followed by the exact presence bitmap bytes. |
 | `CHUNKEXISTS x y` | `+OK 0` or `+OK 1` | Report whether the chunk exists independently of block presence. |
 | `CHUNKSET x y payload` | `+OK` | Persist a packed regular chunk from an exact-length hexadecimal payload. |
+| `CHUNKSET x y STATE payload\|presence` | `+OK` | Atomically persist an exact-length hexadecimal payload and presence bitmap. |
 | `QUIT` | `+OK` | Close the session after the response. |
 
 The `INFO` payload contains newline-terminated `key=value` records in this
@@ -107,16 +111,26 @@ Counters are monotonic for one store lifetime and reset when the process
 reopens the store. Gauges may increase or decrease. No unbounded or
 backend-defined keys are included.
 
-`CHUNK` and `CHUNKBIN` return `NOT_FOUND` when their chunk file is absent.
+`CHUNK` and `CHUNKBIN`, including their `STATE` forms, return `NOT_FOUND` when
+their chunk file is absent.
 `CHUNKEXISTS` reports `1` for any persisted chunk, including one whose block
 presence bitmap is empty, and `0` for a missing chunk. Storage failures are
 reported with the `STORAGE` code. The binary byte count is the existing bulk
 response length; payload bytes may contain any value.
-These commands retain their version 1 packed-value payload and do not include
-the block presence bitmap. `CHUNKSET` therefore marks every imported block
-present, including zero-valued blocks. The packed payload layout and persisted
-presence bitmap are defined in the
-[storage format specification](STORAGE_FORMAT.md).
+
+The legacy forms retain their version 1 packed-value payload and do not include
+the block presence bitmap. Legacy `CHUNKSET` therefore marks every imported
+block present, including zero-valued blocks. Text `STATE` reads emit lowercase
+hexadecimal. In the text `STATE` forms, `payload` has exactly
+`2 * payload_bytes` hexadecimal characters and `presence` has exactly
+`2 * presence_bytes`; one `|` separates them. In the binary read form the bulk
+response contains exactly
+`payload_bytes + presence_bytes`. Unused high bits in the final presence byte
+and final payload byte must be zero. `CHUNKSET ... STATE` validates the
+complete state before taking the write lock, clears payload values for absent
+blocks, and publishes the chunk with one storage write. A validation or
+storage error cannot apply a partial state. The packed payload layout and
+presence bitmap are defined in the [storage format specification](STORAGE_FORMAT.md).
 
 The server rejects command lines larger than its configured `max_line_bytes`
 limit, including CRLF, and keeps the connection available after a complete

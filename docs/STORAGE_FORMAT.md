@@ -64,6 +64,16 @@ Presence is independent of the packed value, so a present zero differs from an
 absent block. Clearing a block also zeroes its packed value. `CHUNKSET` imports
 an existing packed payload and marks every block present.
 
+The protocol maps this state without changing the on-disk format:
+
+- `CHUNKBIN x y STATE` returns the payload bytes followed by the presence
+  bitmap bytes;
+- `CHUNK x y STATE` returns the same two byte sequences as lowercase
+  hexadecimal separated by `|`;
+- `CHUNKSET x y STATE payload|presence` validates both exact byte lengths,
+  clears payload values whose presence bits are absent, and supplies the
+  complete state to one atomic chunk write.
+
 Readers also accept the previous `RGDBSPL1` layout, whose exact size is
 `44 + payload_bytes + 4` and which has no presence bitmap. During migration,
 each nonzero legacy block is present and each zero legacy block is absent. The

@@ -55,6 +55,7 @@ func testIntegrationTCPCommandLifecycle(t *testing.T) {
 	}()
 
 	request := "PING\r\nAUTH secret\r\nSET -1 2 9\r\nINFO\r\nEXISTS -1 2\r\nGET -1 2\r\nCHUNK -1 1\r\n" +
+		"CHUNK -1 1 STATE\r\nCHUNKBIN -1 1 STATE\r\nCHUNKSET 2 2 STATE 9100|01\r\nCHUNK 2 2 STATE\r\n" +
 		"CHUNKEXISTS -1 1\r\nCHUNKEXISTS 99 99\r\nSET -1 2 0\r\nEXISTS -1 2\r\n" +
 		"UNSET -1 2\r\nGET -1 2\r\nEXISTS -1 2\r\nCHUNKEXISTS -1 1\r\nQUIT\r\n"
 	if err := writeIntegrationRequest(connection, request); err != nil {
@@ -98,6 +99,13 @@ func testIntegrationTCPCommandLifecycle(t *testing.T) {
 		"9\r\n",
 		"$4\r\n",
 		"9000\r\n",
+		"$7\r\n",
+		"9000|02\r\n",
+		"$3\r\n",
+		"\x90\x00\x02\r\n",
+		"+OK\r\n",
+		"$7\r\n",
+		"0100|01\r\n",
 		"+OK 1\r\n",
 		"+OK 0\r\n",
 		"+OK\r\n",
