@@ -266,7 +266,8 @@ func testIntegrationTCPOverloadResponse(t *testing.T) {
 		// kernel. The overload response can still be readable from the socket,
 		// so classify the server outcome below instead of requiring this write.
 		_ = writeIntegrationRequest(connection, "PING\r\n")
-		response, err := bufio.NewReader(connection).ReadString('\n')
+		reader := bufio.NewReader(connection)
+		response, err := reader.ReadString('\n')
 		if err != nil {
 			var networkError net.Error
 			if errors.As(err, &networkError) && networkError.Timeout() {
@@ -283,6 +284,17 @@ func testIntegrationTCPOverloadResponse(t *testing.T) {
 		}
 		switch response {
 		case "-ERR NOAUTH authentication required\r\n":
+			if err := writeIntegrationRequest(connection, "QUIT\r\n"); err != nil {
+				t.Fatalf("close queued candidate %d: %v", index, err)
+			}
+			if response, err := reader.ReadString('\n'); err != nil {
+				t.Fatalf("read queued candidate %d QUIT response: %v", index, err)
+			} else if want := "+OK\r\n"; response != want {
+				t.Fatalf("queued candidate %d QUIT response = %q, want %q", index, response, want)
+			}
+			if _, err := reader.ReadByte(); err != io.EOF {
+				t.Fatalf("queued candidate %d remained open after QUIT: %v", index, err)
+			}
 			served++
 		case "-ERR BUSY server overloaded\r\n":
 			rejected++
