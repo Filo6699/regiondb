@@ -3,11 +3,85 @@ package fs_split
 import (
 	"bytes"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/Filo6699/regiondb/internal/geometry"
 	"github.com/Filo6699/regiondb/internal/storage"
 )
+
+func TestChunkCacheConcurrentEvictionKeepsRingConsistent(t *testing.T) {
+	t.Parallel()
+
+	const (
+		max     = 8
+		workers = 16
+		writes  = 64
+	)
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 8})
+	cache := newChunkCache(g, max)
+	payload := cachePayload(t, g, 1)
+	start := make(chan struct{})
+	var group sync.WaitGroup
+	group.Add(workers)
+	for worker := range workers {
+		go func() {
+			defer group.Done()
+			<-start
+			for write := range writes {
+				coord := geometry.Coord{X: int64(worker*writes + write)}
+				if err := cache.put(coord, payload); err != nil {
+					t.Errorf("put(%v): %v", coord, err)
+					return
+				}
+				if _, _, err := cache.get(coord); err != nil {
+					t.Errorf("get(%v): %v", coord, err)
+					return
+				}
+				if write%2 == 0 {
+					cache.remove(coord)
+				}
+			}
+		}()
+	}
+	close(start)
+	group.Wait()
+
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if residents := len(cache.entries); residents > max {
+		t.Fatalf("resident entries = %d, want at most %d", residents, max)
+	}
+	if cache.recent.length != len(cache.entries) {
+		t.Fatalf(
+			"eviction ring length = %d, want resident entries %d",
+			cache.recent.length,
+			len(cache.entries),
+		)
+	}
+
+	seen := make(map[*cacheEntry]struct{}, len(cache.entries))
+	var previous *cacheEntry
+	for entry := cache.recent.front; entry != nil; entry = entry.next {
+		if entry.previous != previous {
+			t.Fatalf("entry %v has previous %p, want %p", entry.coord, entry.previous, previous)
+		}
+		if _, duplicate := seen[entry]; duplicate {
+			t.Fatalf("entry %v appears more than once in the eviction ring", entry.coord)
+		}
+		seen[entry] = struct{}{}
+		if cached := cache.entries[entry.coord]; cached != entry {
+			t.Fatalf("entry %v is not owned by the resident map", entry.coord)
+		}
+		previous = entry
+	}
+	if previous != cache.recent.back {
+		t.Fatalf("eviction ring back = %p, want %p", cache.recent.back, previous)
+	}
+	if len(seen) != len(cache.entries) {
+		t.Fatalf("reachable eviction entries = %d, want %d", len(seen), len(cache.entries))
+	}
+}
 
 func TestChunkCacheSparseEvictionKeepsConstantFootprint(t *testing.T) {
 	t.Parallel()
