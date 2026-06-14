@@ -40,11 +40,13 @@ jobs:
       - name: Build server and benchmark
         shell: pwsh
         run: |
-          go build -trimpath -o regiondb.exe ./cmd/regiondb
+          $serverPath = Join-Path $env:RUNNER_TEMP "regiondb.exe"
+          $benchmarkPath = Join-Path $env:RUNNER_TEMP "regiondb-bench.exe"
+          go build -trimpath -o $serverPath ./cmd/regiondb
           if ($LASTEXITCODE -ne 0) {
             throw "building regiondb failed with exit code $LASTEXITCODE"
           }
-          go build -trimpath -o regiondb-bench.exe ./cmd/regiondb-bench
+          go build -trimpath -o $benchmarkPath ./cmd/regiondb-bench
           if ($LASTEXITCODE -ne 0) {
             throw "building regiondb-bench failed with exit code $LASTEXITCODE"
           }
@@ -67,6 +69,8 @@ jobs:
           $dataDir = Join-Path $env:RUNNER_TEMP (
             "regiondb-windows-sparse-data-run-$runLabel"
           )
+          $serverPath = Join-Path $env:RUNNER_TEMP "regiondb.exe"
+          $benchmarkPath = Join-Path $env:RUNNER_TEMP "regiondb-bench.exe"
           New-Item -ItemType Directory -Force -Path $artifactDir, $dataDir | Out-Null
 
           $token = [guid]::NewGuid().ToString("N")
@@ -80,7 +84,7 @@ jobs:
             "-block-bits", "5"
           )
           $server = Start-Process `
-            -FilePath ".\regiondb.exe" `
+            -FilePath $serverPath `
             -ArgumentList $serverArguments `
             -RedirectStandardOutput (Join-Path $artifactDir "server.stdout.log") `
             -RedirectStandardError (Join-Path $artifactDir "server.stderr.log") `
@@ -149,7 +153,7 @@ jobs:
               $attemptPath = Join-Path $artifactDir (
                 "run-{0}-attempt-{1:D2}.log" -f $runLabel, $attempt
               )
-              $output = & .\regiondb-bench.exe `
+              $output = & $benchmarkPath `
                 -address $address `
                 -token $token `
                 -seed $env:BENCHMARK_SEED `
@@ -188,6 +192,17 @@ jobs:
               Stop-Process -Id $server.Id -Force
               $server.WaitForExit()
             }
+          }
+
+      - name: Verify checkout remains clean
+        shell: pwsh
+        run: |
+          $changes = @(git status --porcelain --untracked-files=all)
+          if ($LASTEXITCODE -ne 0) {
+            throw "git status failed with exit code $LASTEXITCODE"
+          }
+          if ($changes.Count -ne 0) {
+            throw "benchmark workflow changed the checkout: $($changes -join ', ')"
           }
 
       - name: Upload benchmark evidence

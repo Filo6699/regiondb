@@ -95,7 +95,9 @@ hardware, operating system, and server configuration. Quick benchmark tests
 only prove that the scenarios complete and emit valid output; they do not
 enforce performance thresholds. The reproducible benchmark workflow runs those
 quick tests before collecting its bundle. Full integration, stress, and crash
-suites remain in their dedicated validation gates.
+suites remain in their dedicated validation gates. Benchmark executables,
+working data, and generated artifacts are staged under the runner temporary
+directory, and the workflow fails if a run changes the source checkout.
 
 The [measured baseline](benchmarks/measured-baseline-2026-07-30.md) records a
 specific local environment, command, commit, and raw artifact. It is suitable

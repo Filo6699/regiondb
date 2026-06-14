@@ -64,7 +64,7 @@ jobs:
             ./cmd/regiondb-bench
 
       - name: Build benchmark
-        run: go build -trimpath -o benchmark-runner ./cmd/regiondb-direct-bench
+        run: go build -trimpath -o "$RUNNER_TEMP/regiondb-direct-bench" ./cmd/regiondb-direct-bench
 
       - name: Run benchmark and write manifest
         shell: bash
@@ -75,7 +75,7 @@ jobs:
           mkdir -p "$artifact_dir" "$data_dir"
 
           flags="-data-dir <temporary> -seed ${BENCHMARK_SEED} -ops ${BENCHMARK_OPERATIONS} -workload ${BENCHMARK_WORKLOAD} -durability ${BENCHMARK_DURABILITY}"
-          ./benchmark-runner \
+          "$RUNNER_TEMP/regiondb-direct-bench" \
             -data-dir "$data_dir" \
             -seed "$BENCHMARK_SEED" \
             -ops "$BENCHMARK_OPERATIONS" \
@@ -97,6 +97,10 @@ jobs:
             cd "$artifact_dir"
             sha256sum manifest.json raw-output.json > SHA256SUMS
           )
+
+      - name: Verify checkout remains clean
+        shell: bash
+        run: test -z "$(git status --porcelain --untracked-files=all)"
 
       - name: Upload benchmark artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
