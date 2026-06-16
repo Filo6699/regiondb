@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -117,8 +118,12 @@ func (s *Session) Execute(command Command) Response {
 		return bulkResponse(infoPayload(s.engine.store.RuntimeStats()))
 	case "GET":
 		return s.get(command.Args)
+	case "MGET":
+		return s.mget(command.Args)
 	case "SET":
 		return s.set(command.Args)
+	case "MSET":
+		return s.mset(command.Args)
 	case "UNSET":
 		return s.unset(command.Args)
 	case "EXISTS":
@@ -174,7 +179,7 @@ func (s *Session) authenticate(args []string) Response {
 	if response := requireArity(args, 1); response != nil {
 		return *response
 	}
-	if args[0] != s.engine.token {
+	if !tokensEqual(args[0], s.engine.token) {
 		s.authenticated = false
 		return errorResponse("AUTH", "authentication failed")
 	}
@@ -197,6 +202,21 @@ func (s *Session) get(args []string) Response {
 		return *response
 	}
 	return bulkResponse([]byte(strconv.FormatUint(value, 10)))
+}
+
+func (s *Session) mget(args []string) Response {
+	if len(args) == 0 || len(args)%2 != 0 {
+		return errorResponse("ARITY", "wrong number of arguments")
+	}
+	items := make([][]byte, 0, len(args)/2)
+	for index := 0; index < len(args); index += 2 {
+		response := s.get(args[index : index+2])
+		if response.kind != responseBulk {
+			return response
+		}
+		items = append(items, response.payload)
+	}
+	return arrayResponse(items)
 }
 
 func (s *Session) set(args []string) Response {
@@ -236,6 +256,19 @@ func (s *Session) set(args []string) Response {
 	}
 	if err := s.engine.store.WriteChunk(mapping.Chunk, chunk); err != nil {
 		return errorResponse("STORAGE", "write failed")
+	}
+	return okResponse("")
+}
+
+func (s *Session) mset(args []string) Response {
+	if len(args) == 0 || len(args)%3 != 0 {
+		return errorResponse("ARITY", "wrong number of arguments")
+	}
+	for index := 0; index < len(args); index += 3 {
+		response := s.set(args[index : index+3])
+		if response.kind != responseOK {
+			return response
+		}
 	}
 	return okResponse("")
 }
@@ -577,4 +610,8 @@ func validDecimal(value string, signed bool) bool {
 
 func fitsBits(value uint64, width uint8) bool {
 	return width == 64 || value < uint64(1)<<width
+}
+
+func tokensEqual(left, right string) bool {
+	return subtle.ConstantTimeCompare([]byte(left), []byte(right)) == 1
 }

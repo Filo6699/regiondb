@@ -46,6 +46,14 @@ Bulk data:
 $<decimal-byte-count>\r\n<payload>\r\n
 ```
 
+Array of bulk data:
+
+```text
+*<decimal-item-count>\r\n
+$<decimal-byte-count>\r\n<payload>\r\n
+...
+```
+
 The byte count covers only `payload`. Protocol errors do not close the
 connection. `QUIT` sends its response and then closes it.
 
@@ -67,7 +75,9 @@ below. These coordinate spaces are distinct; the
 | `PING` | `+OK PONG` | Check an authenticated session. |
 | `INFO` | Bulk runtime snapshot | Identify the server and report bounded runtime counters. |
 | `GET x y` | Bulk decimal value | Read a block; an absent block or chunk reads as zero. |
+| `MGET x1 y1 [x2 y2 ...]` | Array of bulk decimal values | Read one or more blocks in argument order. |
 | `SET x y value` | `+OK` | Persist one packed block value and mark the block present, including when the value is zero. |
+| `MSET x1 y1 value1 [x2 y2 value2 ...]` | `+OK` | Persist one or more block values in argument order. |
 | `UNSET x y` | `+OK` | Mark a block absent and clear its packed value; unsetting a block in a missing chunk is idempotent. |
 | `EXISTS x y` | `+OK 0` or `+OK 1` | Report whether the block is present, independently of its value. |
 | `CHUNK x y` | Bulk lowercase hexadecimal payload | Read a packed regular chunk by chunk coordinate. |
@@ -117,6 +127,13 @@ their chunk file is absent.
 presence bitmap is empty, and `0` for a missing chunk. Storage failures are
 reported with the `STORAGE` code. The binary byte count is the existing bulk
 response length; payload bytes may contain any value.
+
+`MSET` and `MGET` require at least one item. A batch is an ordered sequence of
+the corresponding single-item operation, not a transaction or snapshot.
+`MSET` stops at the first invalid item or storage error: every preceding item
+has already been applied and later items have not been attempted. `MGET` stops
+and returns an error if any item fails, without returning a partial array;
+concurrent writes may become visible between items.
 
 The legacy forms retain their version 1 packed-value payload and do not include
 the block presence bitmap. Legacy `CHUNKSET` therefore marks every imported

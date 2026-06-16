@@ -57,6 +57,23 @@ func TestParseFrame(t *testing.T) {
 	}
 }
 
+func TestSerializeCommand(t *testing.T) {
+	t.Parallel()
+
+	got, err := SerializeCommand("SET", "-12", "34", "7")
+	if err != nil {
+		t.Fatalf("SerializeCommand() error = %v", err)
+	}
+	if want := "SET -12 34 7\r\n"; string(got) != want {
+		t.Fatalf("SerializeCommand() = %q, want %q", got, want)
+	}
+	for _, argument := range []string{"safe\rQUIT", "safe\nQUIT", "safe\r\nQUIT"} {
+		if _, err := SerializeCommand("AUTH", argument); !errors.Is(err, ErrInvalidFrame) {
+			t.Fatalf("SerializeCommand(%q) error = %v, want ErrInvalidFrame", argument, err)
+		}
+	}
+}
+
 func BenchmarkParseFrameReuse(b *testing.B) {
 	frame := []byte("SET -12 34 7\r\n")
 	scratch := make([]string, 0, 4)
@@ -88,6 +105,11 @@ func TestResponseFraming(t *testing.T) {
 		},
 		{name: "bulk", response: bulkResponse([]byte("123")), want: "$3\r\n123\r\n"},
 		{name: "empty bulk", response: bulkResponse(nil), want: "$0\r\n\r\n"},
+		{
+			name:     "array",
+			response: arrayResponse([][]byte{[]byte("1"), []byte("23"), nil}),
+			want:     "*3\r\n$1\r\n1\r\n$2\r\n23\r\n$0\r\n\r\n",
+		},
 	}
 
 	for _, test := range tests {

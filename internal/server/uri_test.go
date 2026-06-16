@@ -45,6 +45,8 @@ func TestParseURI(t *testing.T) {
 		{name: "fragment", raw: "region://secret@localhost:1/#x", wantErr: true},
 		{name: "space in token", raw: "region://bad%20token@localhost:1/", wantErr: true},
 		{name: "unbracketed IPv6", raw: "region://secret@::1:8123/", wantErr: true},
+		{name: "unclosed IPv6 bracket", raw: "region://secret@[::1:8123/", wantErr: true},
+		{name: "IPv6 missing port", raw: "region://secret@[::1]/", wantErr: true},
 	}
 
 	for _, test := range tests {

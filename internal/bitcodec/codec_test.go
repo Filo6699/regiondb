@@ -136,4 +136,14 @@ func TestLittleEndianHelpers(t *testing.T) {
 	if _, err := Uint64(data[:7]); !errors.Is(err, ErrShortBuffer) {
 		t.Fatalf("Uint64(short) error = %v", err)
 	}
+	high := []byte{
+		0xff, 0xff, 0xff, 0xff,
+		0xff, 0xff, 0xff, 0xff,
+	}
+	if got, err := Uint32(high); err != nil || got != math.MaxUint32 {
+		t.Fatalf("Uint32(high bytes) = %x, %v", got, err)
+	}
+	if got, err := Uint64(high); err != nil || got != math.MaxUint64 {
+		t.Fatalf("Uint64(high bytes) = %x, %v", got, err)
+	}
 }

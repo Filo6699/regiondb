@@ -23,6 +23,7 @@ import (
 
 	"github.com/Filo6699/regiondb/internal/benchmark"
 	"github.com/Filo6699/regiondb/internal/geometry"
+	"github.com/Filo6699/regiondb/internal/protocol"
 	"github.com/Filo6699/regiondb/internal/server"
 )
 
@@ -401,7 +402,7 @@ func dialClient(
 	for value := range result.encodedChunk {
 		result.encodedChunk[value] = hex.EncodeToString(benchmark.Payload(g, byte(value)))
 	}
-	if err := result.simple(ctx, "AUTH "+token+"\r\n"); err != nil {
+	if err := result.simple(ctx, "AUTH", token); err != nil {
 		_ = connection.Close()
 		return nil, fmt.Errorf("authenticate benchmark connection: %w", err)
 	}
@@ -418,9 +419,13 @@ func (c *client) close() error {
 }
 
 func (c *client) readChunk(ctx context.Context, coord geometry.Coord) error {
-	command := "CHUNKBIN " + strconv.FormatInt(coord.X, 10) + " " +
-		strconv.FormatInt(coord.Y, 10) + "\r\n"
-	payload, err := c.bulk(ctx, command, c.payloadBytes)
+	payload, err := c.bulk(
+		ctx,
+		c.payloadBytes,
+		"CHUNKBIN",
+		strconv.FormatInt(coord.X, 10),
+		strconv.FormatInt(coord.Y, 10),
+	)
 	if err == nil && len(payload) != c.payloadBytes {
 		return fmt.Errorf("unexpected chunk payload length %d", len(payload))
 	}
@@ -428,13 +433,17 @@ func (c *client) readChunk(ctx context.Context, coord geometry.Coord) error {
 }
 
 func (c *client) writeChunk(ctx context.Context, coord geometry.Coord, value byte) error {
-	command := "CHUNKSET " + strconv.FormatInt(coord.X, 10) + " " +
-		strconv.FormatInt(coord.Y, 10) + " " + c.encodedChunk[value] + "\r\n"
-	return c.simple(ctx, command)
+	return c.simple(
+		ctx,
+		"CHUNKSET",
+		strconv.FormatInt(coord.X, 10),
+		strconv.FormatInt(coord.Y, 10),
+		c.encodedChunk[value],
+	)
 }
 
-func (c *client) simple(ctx context.Context, command string) error {
-	line, err := c.request(ctx, command)
+func (c *client) simple(ctx context.Context, name string, args ...string) error {
+	line, err := c.request(ctx, name, args...)
 	if err != nil {
 		return err
 	}
@@ -444,8 +453,13 @@ func (c *client) simple(ctx context.Context, command string) error {
 	return nil
 }
 
-func (c *client) bulk(ctx context.Context, command string, maximumLength int) ([]byte, error) {
-	line, err := c.request(ctx, command)
+func (c *client) bulk(
+	ctx context.Context,
+	maximumLength int,
+	name string,
+	args ...string,
+) ([]byte, error) {
+	line, err := c.request(ctx, name, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -467,7 +481,7 @@ func (c *client) bulk(ctx context.Context, command string, maximumLength int) ([
 }
 
 func (c *client) lockModes(ctx context.Context) (benchmark.LockModes, error) {
-	payload, err := c.bulk(ctx, "INFO\r\n", 512)
+	payload, err := c.bulk(ctx, 512, "INFO")
 	if err != nil {
 		return benchmark.LockModes{}, err
 	}
@@ -490,8 +504,12 @@ func (c *client) lockModes(ctx context.Context) (benchmark.LockModes, error) {
 	return modes, nil
 }
 
-func (c *client) request(ctx context.Context, command string) (string, error) {
+func (c *client) request(ctx context.Context, name string, args ...string) (string, error) {
 	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	command, err := protocol.SerializeCommand(name, args...)
+	if err != nil {
 		return "", err
 	}
 	stopCancellation := context.AfterFunc(ctx, func() {
@@ -505,7 +523,7 @@ func (c *client) request(ctx context.Context, command string) (string, error) {
 	if err := c.connection.SetDeadline(deadline); err != nil {
 		return "", fmt.Errorf("set operation deadline: %w", err)
 	}
-	if _, err := c.writer.WriteString(command); err != nil {
+	if _, err := c.writer.Write(command); err != nil {
 		return "", fmt.Errorf("write command: %w", err)
 	}
 	if err := c.writer.Flush(); err != nil {

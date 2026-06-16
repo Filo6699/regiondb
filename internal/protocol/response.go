@@ -10,11 +10,13 @@ const (
 	responseOK responseKind = iota
 	responseError
 	responseBulk
+	responseArray
 )
 
 type Response struct {
 	kind    responseKind
 	payload []byte
+	items   [][]byte
 }
 
 func (r Response) Bytes() []byte {
@@ -40,6 +42,19 @@ func (r Response) Bytes() []byte {
 		result = append(result, '\r', '\n')
 		result = append(result, r.payload...)
 		return append(result, '\r', '\n')
+	case responseArray:
+		result := make([]byte, 0, 4+len(r.items)*8)
+		result = append(result, '*')
+		result = strconv.AppendInt(result, int64(len(r.items)), 10)
+		result = append(result, '\r', '\n')
+		for _, item := range r.items {
+			result = append(result, '$')
+			result = strconv.AppendInt(result, int64(len(item)), 10)
+			result = append(result, '\r', '\n')
+			result = append(result, item...)
+			result = append(result, '\r', '\n')
+		}
+		return result
 	default:
 		return []byte("-ERR INTERNAL invalid response\r\n")
 	}
@@ -61,4 +76,12 @@ func errorResponse(code, detail string) Response {
 
 func bulkResponse(payload []byte) Response {
 	return Response{kind: responseBulk, payload: append([]byte(nil), payload...)}
+}
+
+func arrayResponse(items [][]byte) Response {
+	cloned := make([][]byte, len(items))
+	for index, item := range items {
+		cloned[index] = append([]byte(nil), item...)
+	}
+	return Response{kind: responseArray, items: cloned}
 }

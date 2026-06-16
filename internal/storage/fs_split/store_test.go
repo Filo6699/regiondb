@@ -67,6 +67,38 @@ func TestStoreReopenRoundTrip(t *testing.T) {
 	}
 }
 
+func TestChunkChecksumInitializationIsConcurrentSafe(t *testing.T) {
+	t.Parallel()
+
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 2, LargeChunkEdge: 2, BlockBits: 3})
+	store := &Store{geometry: g}
+	coord := geometry.Coord{X: -1, Y: 2}
+	payload := []byte{0x41, 0x04}
+	presence := []byte{0x0f}
+	want := store.encodeState(coord, payload, presence)
+
+	const workers = 32
+	start := make(chan struct{})
+	results := make(chan []byte, workers)
+	var group sync.WaitGroup
+	group.Add(workers)
+	for range workers {
+		go func() {
+			defer group.Done()
+			<-start
+			results <- store.encodeState(coord, payload, presence)
+		}()
+	}
+	close(start)
+	group.Wait()
+	close(results)
+	for got := range results {
+		if string(got) != string(want) {
+			t.Fatalf("concurrent encoding = %x, want %x", got, want)
+		}
+	}
+}
+
 func TestStorePersistsExplicitZeroAndAbsentBlocks(t *testing.T) {
 	t.Parallel()
 

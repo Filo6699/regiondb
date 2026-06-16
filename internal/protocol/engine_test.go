@@ -131,6 +131,62 @@ func TestSessionBlockAndChunkCommands(t *testing.T) {
 	}
 }
 
+func TestSessionBatchCommands(t *testing.T) {
+	t.Parallel()
+
+	session := newTestSession(t)
+	assertResponse(t, session, "AUTH test-token\r\n", "+OK\r\n")
+	assertResponse(t, session, "MSET -1 0 7 0 0 0 3 -4 5\r\n", "+OK\r\n")
+	assertResponse(
+		t,
+		session,
+		"MGET -1 0 0 0 3 -4 99 99\r\n",
+		"*4\r\n$1\r\n7\r\n$1\r\n0\r\n$1\r\n5\r\n$1\r\n0\r\n",
+	)
+}
+
+func TestSessionMSetAppliesOnlySuccessfulPrefix(t *testing.T) {
+	t.Parallel()
+
+	g := testGeometry(t)
+	store := &memoryStore{
+		chunks:       make(map[geometry.Coord]*storage.Chunk),
+		writeErrorAt: 2,
+		writeErr:     errors.New("private path: /secret/data/chunk.rdb"),
+	}
+	engine, err := NewEngine(g, store, "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := engine.NewSession()
+	assertResponse(t, session, "AUTH test-token\r\n", "+OK\r\n")
+	assertResponse(t, session, "MSET 0 0 1 2 0 2 4 0 3\r\n", "-ERR STORAGE write failed\r\n")
+	assertResponse(t, session, "MGET 0 0 2 0 4 0\r\n", "*3\r\n$1\r\n1\r\n$1\r\n0\r\n$1\r\n0\r\n")
+	if store.writeCount != 1 {
+		t.Fatalf("successful WriteChunk() calls = %d, want 1", store.writeCount)
+	}
+}
+
+func TestAuthenticationTokenComparison(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		left  string
+		right string
+		want  bool
+	}{
+		{left: "same-token", right: "same-token", want: true},
+		{left: "same-token", right: "same-tokem"},
+		{left: "short", right: "longer"},
+		{left: "", right: "", want: true},
+	}
+	for _, test := range tests {
+		if got := tokensEqual(test.left, test.right); got != test.want {
+			t.Fatalf("tokensEqual(%q, %q) = %t, want %t", test.left, test.right, got, test.want)
+		}
+	}
+}
+
 func TestSessionInfoRuntimeCounters(t *testing.T) {
 	t.Parallel()
 
@@ -320,6 +376,26 @@ func TestSessionRejectsInvalidCommands(t *testing.T) {
 			frame: "NOPE\r\n",
 			want:  "-ERR COMMAND unknown command\r\n",
 		},
+		{
+			name:  "empty MGET",
+			frame: "MGET\r\n",
+			want:  "-ERR ARITY wrong number of arguments\r\n",
+		},
+		{
+			name:  "incomplete MGET item",
+			frame: "MGET 0 0 1\r\n",
+			want:  "-ERR ARITY wrong number of arguments\r\n",
+		},
+		{
+			name:  "empty MSET",
+			frame: "MSET\r\n",
+			want:  "-ERR ARITY wrong number of arguments\r\n",
+		},
+		{
+			name:  "incomplete MSET item",
+			frame: "MSET 0 0 1 2\r\n",
+			want:  "-ERR ARITY wrong number of arguments\r\n",
+		},
 	}
 
 	for _, test := range tests {
@@ -342,7 +418,9 @@ func TestSessionEnforcesCommandArity(t *testing.T) {
 		"PING extra\r\n",
 		"INFO extra\r\n",
 		"GET 1\r\n",
+		"MGET 1\r\n",
 		"SET 1 2\r\n",
+		"MSET 1 2\r\n",
 		"UNSET 1\r\n",
 		"EXISTS 1 2 3\r\n",
 		"CHUNK 1\r\n",
@@ -425,14 +503,16 @@ func TestSessionStorageErrors(t *testing.T) {
 	session := engine.NewSession()
 	assertResponse(t, session, "AUTH test-token\r\n", "+OK\r\n")
 
-	store.readErr = errors.New("read failure")
+	store.readErr = errors.New("read failure at /private/regiondb/chunk.rdb")
 	assertResponse(t, session, "GET 0 0\r\n", "-ERR STORAGE read failed\r\n")
+	assertResponse(t, session, "MGET 0 0\r\n", "-ERR STORAGE read failed\r\n")
 	assertResponse(t, session, "CHUNKBIN 0 0\r\n", "-ERR STORAGE read failed\r\n")
 	assertResponse(t, session, "CHUNKEXISTS 0 0\r\n", "-ERR STORAGE read failed\r\n")
 	store.readErr = nil
 	assertResponse(t, session, "SET 0 0 1\r\n", "+OK\r\n")
-	store.writeErr = errors.New("write failure")
+	store.writeErr = errors.New("write failure at /private/regiondb/chunk.rdb")
 	assertResponse(t, session, "SET 0 0 2\r\n", "-ERR STORAGE write failed\r\n")
+	assertResponse(t, session, "MSET 0 0 2\r\n", "-ERR STORAGE write failed\r\n")
 	assertResponse(t, session, "UNSET 0 0\r\n", "-ERR STORAGE write failed\r\n")
 	assertResponse(t, session, "CHUNKSET 0 0 0000\r\n", "-ERR STORAGE write failed\r\n")
 	assertResponse(t, session, "CHUNKSET 0 0 STATE 0000|01\r\n", "-ERR STORAGE write failed\r\n")
@@ -504,11 +584,12 @@ func assertResponse(t *testing.T, session *Session, frame, want string) {
 }
 
 type memoryStore struct {
-	chunks     map[geometry.Coord]*storage.Chunk
-	readErr    error
-	writeErr   error
-	stats      storage.RuntimeStats
-	writeCount int
+	chunks       map[geometry.Coord]*storage.Chunk
+	readErr      error
+	writeErr     error
+	writeErrorAt int
+	stats        storage.RuntimeStats
+	writeCount   int
 }
 
 func (s *memoryStore) RuntimeStats() storage.RuntimeStats {
@@ -527,7 +608,7 @@ func (s *memoryStore) ReadChunk(coord geometry.Coord) (*storage.Chunk, error) {
 }
 
 func (s *memoryStore) WriteChunk(coord geometry.Coord, chunk *storage.Chunk) error {
-	if s.writeErr != nil {
+	if s.writeErr != nil && (s.writeErrorAt == 0 || s.writeCount+1 == s.writeErrorAt) {
 		return s.writeErr
 	}
 	cloned, err := storage.ChunkFromState(chunk.Geometry(), chunk.Bytes(), chunk.PresenceBytes())

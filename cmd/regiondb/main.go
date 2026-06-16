@@ -25,12 +25,16 @@ import (
 var version = "dev"
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := notifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		logging.New(os.Stderr).Error("process", "exit_failed")
 		os.Exit(1)
 	}
+}
+
+func notifyContext(parent context.Context, signals ...os.Signal) (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(parent, signals...)
 }
 
 type config struct {

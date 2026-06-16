@@ -16,6 +16,24 @@ func ParseFrame(frame []byte) (Command, error) {
 	return parseFrame(frame, nil)
 }
 
+func SerializeCommand(name string, args ...string) ([]byte, error) {
+	size := len(name) + 2
+	for _, arg := range args {
+		size += 1 + len(arg)
+	}
+	frame := make([]byte, 0, size)
+	frame = append(frame, name...)
+	for _, arg := range args {
+		frame = append(frame, ' ')
+		frame = append(frame, arg...)
+	}
+	frame = append(frame, '\r', '\n')
+	if _, err := ParseFrame(frame); err != nil {
+		return nil, fmt.Errorf("serialize command: %w", err)
+	}
+	return frame, nil
+}
+
 func parseFrame(frame []byte, scratch []string) (Command, error) {
 	if len(frame) < 3 || frame[len(frame)-2] != '\r' || frame[len(frame)-1] != '\n' {
 		return Command{}, fmt.Errorf("%w: command must end with CRLF", ErrInvalidFrame)
