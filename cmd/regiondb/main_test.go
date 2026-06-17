@@ -210,14 +210,16 @@ func TestTLSStartupSmoke(t *testing.T) {
 		<-result
 		t.Fatalf("TLS dial failed: %v", err)
 	}
-	if _, err := connection.Write([]byte("AUTH secret\r\nPING\r\n")); err != nil {
+	_, writeErr := connection.Write([]byte("AUTH secret\r\nPING\r\n"))
+	if writeErr != nil {
 		cancel()
-		t.Fatal(err)
+		t.Fatal(writeErr)
 	}
 	response := make([]byte, len("+OK\r\n+OK PONG\r\n"))
-	if _, err := io.ReadFull(connection, response); err != nil {
+	_, readErr := io.ReadFull(connection, response)
+	if readErr != nil {
 		cancel()
-		t.Fatal(err)
+		t.Fatal(readErr)
 	}
 	if got, want := string(response), "+OK\r\n+OK PONG\r\n"; got != want {
 		cancel()

@@ -60,9 +60,10 @@ func TestServePipelinedCommands(t *testing.T) {
 	})
 
 	request := "PING\r\nAUTH secret\r\nSET 0 0 5\r\nGET 0 0\r\nCHUNKBIN 0 0\r\nQUIT\r\n"
-	if _, err := io.WriteString(connection, request); err != nil {
+	_, writeErr := io.WriteString(connection, request)
+	if writeErr != nil {
 		cancel()
-		t.Fatal(err)
+		t.Fatal(writeErr)
 	}
 	reader := bufio.NewReader(connection)
 	want := []string{
@@ -86,9 +87,10 @@ func TestServePipelinedCommands(t *testing.T) {
 			t.Fatalf("response = %q, want %q", got, expected)
 		}
 	}
-	if _, err := reader.ReadByte(); err != io.EOF {
+	_, readErr := reader.ReadByte()
+	if readErr != io.EOF {
 		cancel()
-		t.Fatalf("read after QUIT error = %v, want EOF", err)
+		t.Fatalf("read after QUIT error = %v, want EOF", readErr)
 	}
 
 	cancel()
@@ -123,12 +125,13 @@ func TestServePreservesPartialLinesAndMalformedBoundaries(t *testing.T) {
 
 	writeResult := make(chan error, 1)
 	go func() {
-		if _, err := io.WriteString(clientConnection, "AUTH sec"); err != nil {
-			writeResult <- err
+		_, writeErr := io.WriteString(clientConnection, "AUTH sec")
+		if writeErr != nil {
+			writeResult <- writeErr
 			return
 		}
-		_, err := io.WriteString(clientConnection, "ret\r\nPING\nPING\r\nQUIT\r\n")
-		writeResult <- err
+		_, writeErr = io.WriteString(clientConnection, "ret\r\nPING\nPING\r\nQUIT\r\n")
+		writeResult <- writeErr
 	}()
 
 	reader := bufio.NewReader(clientConnection)
@@ -149,8 +152,9 @@ func TestServePreservesPartialLinesAndMalformedBoundaries(t *testing.T) {
 	if err := <-writeResult; err != nil {
 		t.Fatalf("write request: %v", err)
 	}
-	if _, err := reader.ReadByte(); err != io.EOF {
-		t.Fatalf("read after QUIT error = %v, want EOF", err)
+	_, readErr := reader.ReadByte()
+	if readErr != io.EOF {
+		t.Fatalf("read after QUIT error = %v, want EOF", readErr)
 	}
 	<-serveDone
 }
@@ -181,9 +185,10 @@ func TestServeRejectsOversizedLineAndContinues(t *testing.T) {
 	t.Cleanup(func() {
 		_ = connection.Close()
 	})
-	if _, err := io.WriteString(connection, "XXXXXXXXXXXXXXXX\r\nAUTH secret\r\n"); err != nil {
+	_, writeErr := io.WriteString(connection, "XXXXXXXXXXXXXXXX\r\nAUTH secret\r\n")
+	if writeErr != nil {
 		cancel()
-		t.Fatal(err)
+		t.Fatal(writeErr)
 	}
 	reader := bufio.NewReader(connection)
 	for _, want := range []string{
@@ -271,7 +276,8 @@ func TestServeRejectsConnectionsBeyondBoundedQueue(t *testing.T) {
 		t.Fatalf("Accept() calls = %d, want at least 3", got)
 	}
 	for index, connection := range []net.Conn{firstClient, secondClient} {
-		if _, err := connection.Write([]byte("PING\r\n")); err == nil {
+		_, writeErr := connection.Write([]byte("PING\r\n"))
+		if writeErr == nil {
 			t.Fatalf("connection %d remained open after cancellation", index)
 		}
 	}
@@ -337,9 +343,11 @@ func TestServeCancellationClosesIdleConnections(t *testing.T) {
 	if err := <-serveResult; err != nil {
 		t.Fatalf("Serve() error = %v", err)
 	}
-	if _, err := connection.Write([]byte("PING\r\n")); err == nil {
+	_, writeErr := connection.Write([]byte("PING\r\n"))
+	if writeErr == nil {
 		buffer := make([]byte, 1)
-		if _, err := connection.Read(buffer); err == nil {
+		_, readErr := connection.Read(buffer)
+		if readErr == nil {
 			t.Fatal("idle connection remained open after cancellation")
 		}
 	}
@@ -385,8 +393,9 @@ func TestIdleDeadlineReleasesWorker(t *testing.T) {
 	waitForAccept(t, listener, 2)
 	listener.connections <- secondServer
 	t.Cleanup(func() { _ = secondClient.Close() })
-	if _, err := io.WriteString(secondClient, "PING\r\n"); err != nil {
-		t.Fatalf("write queued request: %v", err)
+	_, writeErr := io.WriteString(secondClient, "PING\r\n")
+	if writeErr != nil {
+		t.Fatalf("write queued request: %v", writeErr)
 	}
 	if err := secondClient.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatal(err)
@@ -399,7 +408,8 @@ func TestIdleDeadlineReleasesWorker(t *testing.T) {
 		t.Fatalf("queued response = %q, want %q", response, want)
 	}
 
-	if _, err := firstClient.Read(make([]byte, 1)); err == nil {
+	_, readErr := firstClient.Read(make([]byte, 1))
+	if readErr == nil {
 		t.Fatal("idle connection remained open")
 	}
 }
@@ -428,8 +438,9 @@ func TestRequestDeadlineIsAbsoluteForTrickleClient(t *testing.T) {
 		)
 	}()
 
-	if _, err := clientConnection.Write([]byte("P")); err != nil {
-		t.Fatal(err)
+	_, writeErr := clientConnection.Write([]byte("P"))
+	if writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
@@ -447,7 +458,8 @@ func TestRequestDeadlineIsAbsoluteForTrickleClient(t *testing.T) {
 			}
 			return
 		case <-ticker.C:
-			if _, err := clientConnection.Write([]byte("P")); err != nil {
+			_, writeErr = clientConnection.Write([]byte("P"))
+			if writeErr != nil {
 				termination := <-serveDone
 				if termination.phase != "read" || termination.reason != terminationTimeout {
 					t.Fatalf("termination = %+v, want read timeout", termination)
@@ -508,7 +520,8 @@ func TestTLSHandshakeDeadlineIsAbsoluteForTrickleClient(t *testing.T) {
 			if writes == len(recordHeader) {
 				t.Fatal("trickle client completed the TLS record header")
 			}
-			if _, err := clientConnection.Write(recordHeader[writes : writes+1]); err != nil {
+			_, writeErr := clientConnection.Write(recordHeader[writes : writes+1])
+			if writeErr != nil {
 				termination := <-serveDone
 				if termination.phase != "tls_handshake" ||
 					termination.reason != terminationTimeout {
@@ -546,8 +559,9 @@ func TestResponseDeadlineBoundsDrain(t *testing.T) {
 			100*time.Millisecond,
 		)
 	}()
-	if _, err := io.WriteString(clientConnection, "PING\r\n"); err != nil {
-		t.Fatal(err)
+	_, writeErr := io.WriteString(clientConnection, "PING\r\n")
+	if writeErr != nil {
+		t.Fatal(writeErr)
 	}
 
 	select {

@@ -39,10 +39,12 @@ func testIntegrationTCPRequestDeadline(t *testing.T) {
 	defer func() {
 		_ = connection.Close()
 	}()
-	if err := writeIntegrationRequest(connection, "P"); err != nil {
-		t.Fatalf("write partial request: %v", err)
+	writeErr := writeIntegrationRequest(connection, "P")
+	if writeErr != nil {
+		t.Fatalf("write partial request: %v", writeErr)
 	}
-	if _, err := connection.Read(make([]byte, 1)); err == nil {
+	_, readErr := connection.Read(make([]byte, 1))
+	if readErr == nil {
 		t.Fatal("partial request remained open past its deadline")
 	}
 }
@@ -59,8 +61,9 @@ func testIntegrationTCPCommandLifecycle(t *testing.T) {
 		"CHUNK -1 1 STATE\r\nCHUNKBIN -1 1 STATE\r\nCHUNKSET 2 2 STATE 9100|01\r\nCHUNK 2 2 STATE\r\n" +
 		"CHUNKEXISTS -1 1\r\nCHUNKEXISTS 99 99\r\nSET -1 2 0\r\nEXISTS -1 2\r\n" +
 		"UNSET -1 2\r\nGET -1 2\r\nEXISTS -1 2\r\nCHUNKEXISTS -1 1\r\nQUIT\r\n"
-	if err := writeIntegrationRequest(connection, request); err != nil {
-		t.Fatalf("write request: %v", err)
+	writeErr := writeIntegrationRequest(connection, request)
+	if writeErr != nil {
+		t.Fatalf("write request: %v", writeErr)
 	}
 
 	reader := bufio.NewReader(connection)
@@ -135,8 +138,9 @@ func testIntegrationTCPCommandLifecycle(t *testing.T) {
 			t.Fatalf("response = %q, want %q", got, want)
 		}
 	}
-	if _, err := reader.ReadByte(); err != io.EOF {
-		t.Fatalf("read after QUIT error = %v, want EOF", err)
+	_, readErr := reader.ReadByte()
+	if readErr != io.EOF {
+		t.Fatalf("read after QUIT error = %v, want EOF", readErr)
 	}
 }
 
@@ -179,14 +183,16 @@ func testIntegrationTCPConcurrentClients(t *testing.T) {
 			}
 
 			request := fmt.Sprintf("AUTH secret\r\nSET %d 0 %d\r\nGET %d 0\r\nQUIT\r\n", client, client, client)
-			if err := writeIntegrationRequest(connection, request); err != nil {
-				results <- fmt.Errorf("client %d write: %w", client, err)
+			writeErr := writeIntegrationRequest(connection, request)
+			if writeErr != nil {
+				results <- fmt.Errorf("client %d write: %w", client, writeErr)
 				return
 			}
 			want := fmt.Sprintf("+OK\r\n+OK\r\n$1\r\n%d\r\n+OK\r\n", client)
 			response := make([]byte, len(want))
-			if _, err := io.ReadFull(connection, response); err != nil {
-				results <- fmt.Errorf("client %d read: %w", client, err)
+			_, readErr := io.ReadFull(connection, response)
+			if readErr != nil {
+				results <- fmt.Errorf("client %d read: %w", client, readErr)
 				return
 			}
 			if got := string(response); got != want {
@@ -263,12 +269,15 @@ func testIntegrationTCPOverloadResponse(t *testing.T) {
 		waitForIntegrationSignal(t, listener.accepted, index+2, fmt.Sprintf("candidate %d accept", index))
 	}
 
-	if err := writeIntegrationRequest(first, "QUIT\r\n"); err != nil {
-		t.Fatalf("release occupied worker: %v", err)
+	writeErr := writeIntegrationRequest(first, "QUIT\r\n")
+	if writeErr != nil {
+		t.Fatalf("release occupied worker: %v", writeErr)
 	}
-	if response, err := bufio.NewReader(first).ReadString('\n'); err != nil {
-		t.Fatalf("read occupied worker response: %v", err)
-	} else if want := "+OK\r\n"; response != want {
+	response, readErr := bufio.NewReader(first).ReadString('\n')
+	if readErr != nil {
+		t.Fatalf("read occupied worker response: %v", readErr)
+	}
+	if want := "+OK\r\n"; response != want {
 		t.Fatalf("occupied worker response = %q, want %q", response, want)
 	}
 
@@ -301,16 +310,20 @@ func testIntegrationTCPOverloadResponse(t *testing.T) {
 		}
 		switch response {
 		case "-ERR NOAUTH authentication required\r\n":
-			if err := writeIntegrationRequest(connection, "QUIT\r\n"); err != nil {
-				t.Fatalf("close queued candidate %d: %v", index, err)
+			writeErr := writeIntegrationRequest(connection, "QUIT\r\n")
+			if writeErr != nil {
+				t.Fatalf("close queued candidate %d: %v", index, writeErr)
 			}
-			if response, err := reader.ReadString('\n'); err != nil {
-				t.Fatalf("read queued candidate %d QUIT response: %v", index, err)
-			} else if want := "+OK\r\n"; response != want {
+			response, readErr := reader.ReadString('\n')
+			if readErr != nil {
+				t.Fatalf("read queued candidate %d QUIT response: %v", index, readErr)
+			}
+			if want := "+OK\r\n"; response != want {
 				t.Fatalf("queued candidate %d QUIT response = %q, want %q", index, response, want)
 			}
-			if _, err := reader.ReadByte(); err != io.EOF {
-				t.Fatalf("queued candidate %d remained open after QUIT: %v", index, err)
+			_, readErr = reader.ReadByte()
+			if readErr != io.EOF {
+				t.Fatalf("queued candidate %d remained open after QUIT: %v", index, readErr)
 			}
 			served++
 		case "-ERR BUSY server overloaded\r\n":
@@ -342,12 +355,15 @@ func testIntegrationTCPOverloadResponse(t *testing.T) {
 	if err := recovery.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatalf("set recovery deadline: %v", err)
 	}
-	if err := writeIntegrationRequest(recovery, "PING\r\n"); err != nil {
-		t.Fatalf("write recovery request: %v", err)
+	writeErr = writeIntegrationRequest(recovery, "PING\r\n")
+	if writeErr != nil {
+		t.Fatalf("write recovery request: %v", writeErr)
 	}
-	if response, err := bufio.NewReader(recovery).ReadString('\n'); err != nil {
-		t.Fatalf("read recovery response: %v", err)
-	} else if want := "-ERR NOAUTH authentication required\r\n"; response != want {
+	response, readErr = bufio.NewReader(recovery).ReadString('\n')
+	if readErr != nil {
+		t.Fatalf("read recovery response: %v", readErr)
+	}
+	if want := "-ERR NOAUTH authentication required\r\n"; response != want {
 		t.Fatalf("recovery response = %q, want %q", response, want)
 	}
 }
@@ -429,8 +445,9 @@ func TestWriteIntegrationRequestHandlesPartialWrites(t *testing.T) {
 		limit:  2,
 	}
 	const request = "PING\r\n"
-	if err := writeIntegrationRequest(writer, request); err != nil {
-		t.Fatalf("writeIntegrationRequest() error = %v", err)
+	writeErr := writeIntegrationRequest(writer, request)
+	if writeErr != nil {
+		t.Fatalf("writeIntegrationRequest() error = %v", writeErr)
 	}
 	if got := destination.String(); got != request {
 		t.Fatalf("writeIntegrationRequest() = %q, want %q", got, request)
