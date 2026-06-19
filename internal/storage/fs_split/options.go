@@ -30,6 +30,7 @@ type Options struct {
 	CheckpointBytes       int64
 	MaxLoadedChunks       int
 	MaxOpenWALHandles     int
+	DescriptorReserve     int
 	WALGroupCommitUpdates uint64
 }
 
@@ -63,9 +64,12 @@ func (options Options) validated() (Options, error) {
 	if options.MaxOpenWALHandles < 0 {
 		return Options{}, errors.New("maximum open WAL handles must be positive")
 	}
+	if options.DescriptorReserve < 0 {
+		return Options{}, errors.New("descriptor reserve must not be negative")
+	}
 	options.MaxOpenWALHandles = clampWALStreamLimit(
 		options.MaxOpenWALHandles,
-		walDescriptorBudget(),
+		walDescriptorBudget(options.DescriptorReserve),
 	)
 	if options.WALGroupCommitUpdates == 0 {
 		options.WALGroupCommitUpdates = DefaultWALGroupCommitUpdates

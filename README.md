@@ -25,9 +25,12 @@ Storage defaults to `relaxed` durability. Operators can select `fsync-wal` or
 `-checkpoint-records` and `-checkpoint-bytes`. `-max-loaded-chunks` bounds the
 in-memory LRU cache. `-max-open-wal-streams` bounds cached WAL file streams and
 is lowered automatically when the operating-system descriptor budget is
-smaller. `-workers`, `-accept-queue`, and `-max-line-bytes` bound connection
-processing, queued accepted connections, and command lines. The exact
-acknowledgement boundaries are defined in the storage format specification.
+smaller. On Unix, that budget reserves descriptors for the listener, active
+and queued sockets, logs, control files, directory scans, and atomic file
+replacement. `-workers`, `-accept-queue`, and `-max-line-bytes` bound
+connection processing, queued accepted connections, and command lines. The
+exact acknowledgement boundaries are defined in the storage format
+specification.
 
 The server listens on `127.0.0.1:4242` by default. Use `-listen` to select a
 different interface or port.

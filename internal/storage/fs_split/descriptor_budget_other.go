@@ -2,6 +2,6 @@
 
 package fs_split
 
-func walDescriptorBudget() int {
+func walDescriptorBudget(_ int) int {
 	return DefaultMaxOpenWALHandles
 }

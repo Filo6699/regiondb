@@ -78,12 +78,18 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnEr
 		logger.Error("geometry", "configuration_failed")
 		return fmt.Errorf("configure geometry: %w", err)
 	}
+	descriptorReserve, err := serverDescriptorReserve(config.workers, config.acceptQueue)
+	if err != nil {
+		logger.Error("server", "configuration_failed")
+		return err
+	}
 	store, err := fs_split.OpenWithOptions(config.dataDir, g, fs_split.Options{
 		Durability:            config.durability,
 		CheckpointRecords:     config.checkpointRecords,
 		CheckpointBytes:       config.checkpointBytes,
 		MaxLoadedChunks:       config.maxLoadedChunks,
 		MaxOpenWALHandles:     config.maxOpenWALStreams,
+		DescriptorReserve:     descriptorReserve,
 		WALGroupCommitUpdates: config.walGroupCommitUpdates,
 	})
 	if err != nil {
@@ -131,6 +137,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnEr
 		logger.Error("server", "serve_failed")
 	}
 	return err
+}
+
+func serverDescriptorReserve(workers, acceptQueue int) (int, error) {
+	maxInt := int(^uint(0) >> 1)
+	if workers > maxInt-acceptQueue-1 {
+		return 0, errors.New("worker and accept queue sizes are too large")
+	}
+	// Reserve one descriptor for the listener plus one socket for every active
+	// worker and every accepted connection waiting for a worker.
+	return 1 + workers + acceptQueue, nil
 }
 
 func loadTLSConfig(config config) (*tls.Config, error) {

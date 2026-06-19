@@ -5,7 +5,7 @@ package fs_split
 import "testing"
 
 func TestWindowsWALStreamBudgetIsConservative(t *testing.T) {
-	if got := walDescriptorBudget(); got != windowsWALStreamBudget {
+	if got := walDescriptorBudget(128); got != windowsWALStreamBudget {
 		t.Fatalf("Windows WAL stream budget = %d, want %d", got, windowsWALStreamBudget)
 	}
 	if windowsWALStreamBudget < DefaultMaxOpenWALHandles {

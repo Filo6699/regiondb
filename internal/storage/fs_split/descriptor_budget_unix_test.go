@@ -40,7 +40,8 @@ func runLowDescriptorStore(t *testing.T) {
 	}
 	const lowLimit = uint64(64)
 	limitedSoft := min(limit.Cur, lowLimit)
-	if limitedSoft < descriptorReserve+16 {
+	const serverReserve = 7
+	if limitedSoft < descriptorReserve+serverReserve+16 {
 		t.Skipf("descriptor limit is too low for the subprocess test: %d", limit.Cur)
 	}
 	limit.Cur = limitedSoft
@@ -55,11 +56,12 @@ func runLowDescriptorStore(t *testing.T) {
 	store, err := OpenWithOptions(os.Getenv("REGIONDB_LOW_DESCRIPTOR_ROOT"), g, Options{
 		CheckpointRecords: 1,
 		MaxOpenWALHandles: 1024,
+		DescriptorReserve: serverReserve,
 	})
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	wantCap := int(limitedSoft - descriptorReserve)
+	wantCap := int(limitedSoft - descriptorReserve - serverReserve)
 	if got := store.options.MaxOpenWALHandles; got != wantCap {
 		t.Fatalf("effective WAL stream cap = %d, want %d", got, wantCap)
 	}

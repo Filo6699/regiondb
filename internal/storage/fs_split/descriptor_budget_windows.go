@@ -7,6 +7,6 @@ package fs_split
 // non-WAL and runtime-owned handles.
 const windowsWALStreamBudget = 64
 
-func walDescriptorBudget() int {
+func walDescriptorBudget(_ int) int {
 	return windowsWALStreamBudget
 }

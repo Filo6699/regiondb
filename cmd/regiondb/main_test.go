@@ -163,6 +163,23 @@ func TestParseConfigStorageOptions(t *testing.T) {
 	}
 }
 
+func TestServerDescriptorReserveIncludesListenerAndConnections(t *testing.T) {
+	t.Parallel()
+
+	got, err := serverDescriptorReserve(4, 7)
+	if err != nil {
+		t.Fatalf("serverDescriptorReserve() error = %v", err)
+	}
+	if want := 1 + 4 + 7; got != want {
+		t.Fatalf("serverDescriptorReserve() = %d, want %d", got, want)
+	}
+
+	maxInt := int(^uint(0) >> 1)
+	if _, err := serverDescriptorReserve(maxInt, 1); err == nil {
+		t.Fatal("serverDescriptorReserve() accepted an overflowing capacity")
+	}
+}
+
 func TestTLSStartupSmoke(t *testing.T) {
 	certificatePath, keyPath, certificate := writeTestCertificate(t)
 	tlsConfig, err := loadTLSConfig(config{tlsCert: certificatePath, tlsKey: keyPath})
