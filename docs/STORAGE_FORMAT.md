@@ -118,6 +118,12 @@ writes the complete encoded chunk, closes it, and atomically renames it over
 the destination. Directories are created as needed with mode `0755`. Before
 that replacement, the complete new payload is appended to the WAL.
 
+Writer startup removes stale `.regiondb-chunk-*` temporary files left by an
+interrupted atomic replacement. This cleanup processes at most 100,000
+data-directory entries per startup. Reaching the bound stops cleanup without
+changing published chunk files and emits the structured `scan_capped` warning;
+a later startup may resume cleanup of entries beyond the bound.
+
 The configured record and byte thresholds are lower bounds for checkpoint
 hysteresis. Values greater than one trigger a checkpoint at 150% of the
 configured threshold, rounded down; a threshold of one remains immediate.

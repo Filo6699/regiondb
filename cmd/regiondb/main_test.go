@@ -19,6 +19,7 @@ import (
 
 	"github.com/Filo6699/regiondb/internal/defaults"
 	"github.com/Filo6699/regiondb/internal/geometry"
+	"github.com/Filo6699/regiondb/internal/logging"
 	"github.com/Filo6699/regiondb/internal/protocol"
 	"github.com/Filo6699/regiondb/internal/server"
 	"github.com/Filo6699/regiondb/internal/storage/fs_split"
@@ -170,13 +171,88 @@ func TestServerDescriptorReserveIncludesListenerAndConnections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("serverDescriptorReserve() error = %v", err)
 	}
-	if want := 1 + 4 + 7; got != want {
+	if want := 2 + 4 + 7; got != want {
 		t.Fatalf("serverDescriptorReserve() = %d, want %d", got, want)
 	}
 
 	maxInt := int(^uint(0) >> 1)
 	if _, err := serverDescriptorReserve(maxInt, 1); err == nil {
 		t.Fatal("serverDescriptorReserve() accepted an overflowing capacity")
+	}
+}
+
+func TestAutoFitDescriptorLimitsReducesPendingClientsBeforeWAL(t *testing.T) {
+	t.Parallel()
+
+	requested := config{
+		workers:           2,
+		acceptQueue:       8,
+		maxOpenWALStreams: 4,
+	}
+	availableDescriptors := func(reserve int) (int, error) {
+		return max(0, 10-reserve), nil
+	}
+	got, err := autoFitDescriptorLimits(requested, availableDescriptors)
+	if err != nil {
+		t.Fatalf("autoFitDescriptorLimits() error = %v", err)
+	}
+	if got.acceptQueue != 2 || got.maxOpenWALStreams != 4 {
+		t.Fatalf("auto-fitted limits = queue %d, WAL %d; want queue 2, WAL 4",
+			got.acceptQueue, got.maxOpenWALStreams)
+	}
+}
+
+func TestAutoFitDescriptorLimitsClampsWALAfterPendingClients(t *testing.T) {
+	t.Parallel()
+
+	requested := config{
+		workers:           2,
+		acceptQueue:       8,
+		maxOpenWALStreams: 4,
+	}
+	availableDescriptors := func(reserve int) (int, error) {
+		return max(0, 5-reserve), nil
+	}
+	got, err := autoFitDescriptorLimits(requested, availableDescriptors)
+	if err != nil {
+		t.Fatalf("autoFitDescriptorLimits() error = %v", err)
+	}
+	if got.acceptQueue != 0 || got.maxOpenWALStreams != 1 {
+		t.Fatalf("auto-fitted limits = queue %d, WAL %d; want queue 0, WAL 1",
+			got.acceptQueue, got.maxOpenWALStreams)
+	}
+}
+
+func TestAutoFitDescriptorLimitsRejectsWorkerDescriptorExhaustion(t *testing.T) {
+	t.Parallel()
+
+	requested := config{
+		workers:           4,
+		acceptQueue:       8,
+		maxOpenWALStreams: 1,
+	}
+	availableDescriptors := func(reserve int) (int, error) {
+		return max(0, 5-reserve), nil
+	}
+	if _, err := autoFitDescriptorLimits(requested, availableDescriptors); err == nil {
+		t.Fatal("autoFitDescriptorLimits() accepted workers that exhaust the descriptor budget")
+	}
+}
+
+func TestLogStartupScanCappedEmitsStructuredWarning(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	logStartupScanCapped(logging.New(&output), false)
+	if output.Len() != 0 {
+		t.Fatalf("uncapped startup scan logged %q", output.String())
+	}
+	logStartupScanCapped(logging.New(&output), true)
+	got := output.String()
+	if !strings.Contains(got, "level=warn") ||
+		!strings.Contains(got, "event=scan_capped") ||
+		!strings.Contains(got, "max_entries=100000") {
+		t.Fatalf("scan cap log = %q", got)
 	}
 }
 

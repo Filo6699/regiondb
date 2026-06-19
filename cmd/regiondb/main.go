@@ -67,6 +67,23 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnEr
 	logger := logging.New(stderr)
 	logger.Info("process", "starting", slog.String("version", version))
 
+	requestedWALStreams := config.maxOpenWALStreams
+	requestedAcceptQueue := config.acceptQueue
+	config, err = autoFitDescriptorLimits(config, fs_split.AvailableWALDescriptors)
+	if err != nil {
+		logger.Error("server", "configuration_failed")
+		return err
+	}
+	if config.maxOpenWALStreams != requestedWALStreams ||
+		config.acceptQueue != requestedAcceptQueue {
+		logger.Warn("server", "descriptor_limits_adjusted",
+			slog.Int("requested_wal_streams", requestedWALStreams),
+			slog.Int("effective_wal_streams", config.maxOpenWALStreams),
+			slog.Int("requested_accept_queue", requestedAcceptQueue),
+			slog.Int("effective_accept_queue", config.acceptQueue),
+		)
+	}
+
 	tlsConfig, err := loadTLSConfig(config)
 	if err != nil {
 		logger.Error("tls", "configuration_failed")
@@ -100,6 +117,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnEr
 		slog.String("durability", string(config.durability)),
 		slog.Int("max_loaded_chunks", config.maxLoadedChunks),
 	)
+	logStartupScanCapped(logger, store.StartupScanCapped())
 	defer func() {
 		if err := store.Close(); err != nil {
 			logger.Error("storage", "close_failed")
@@ -139,14 +157,78 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnEr
 	return err
 }
 
+func logStartupScanCapped(logger *logging.Logger, capped bool) {
+	if capped {
+		logger.Warn("storage", "scan_capped",
+			slog.Int("max_entries", fs_split.StartupScanEntryLimit),
+		)
+	}
+}
+
 func serverDescriptorReserve(workers, acceptQueue int) (int, error) {
 	maxInt := int(^uint(0) >> 1)
-	if workers > maxInt-acceptQueue-1 {
+	if workers > maxInt-acceptQueue-2 {
 		return 0, errors.New("worker and accept queue sizes are too large")
 	}
-	// Reserve one descriptor for the listener plus one socket for every active
-	// worker and every accepted connection waiting for a worker.
-	return 1 + workers + acceptQueue, nil
+	// Reserve the listener, every worker and queued socket, and the next
+	// accepted socket while overload handling decides whether to reject it.
+	return 2 + workers + acceptQueue, nil
+}
+
+type availableWALDescriptors func(descriptorReserve int) (int, error)
+
+func autoFitDescriptorLimits(
+	result config,
+	availableDescriptors availableWALDescriptors,
+) (config, error) {
+	reserve, err := serverDescriptorReserve(result.workers, result.acceptQueue)
+	if err != nil {
+		return config{}, err
+	}
+	available, err := availableDescriptors(reserve)
+	if err != nil {
+		return config{}, err
+	}
+	if available >= result.maxOpenWALStreams {
+		return result, nil
+	}
+
+	zeroQueueReserve, err := serverDescriptorReserve(result.workers, 0)
+	if err != nil {
+		return config{}, err
+	}
+	zeroQueueAvailable, err := availableDescriptors(zeroQueueReserve)
+	if err != nil {
+		return config{}, err
+	}
+	if zeroQueueAvailable < 1 {
+		return config{}, errors.New("descriptor limit is too low for the configured workers")
+	}
+	if zeroQueueAvailable < result.maxOpenWALStreams {
+		result.acceptQueue = 0
+		result.maxOpenWALStreams = zeroQueueAvailable
+		return result, nil
+	}
+
+	low, high := 0, result.acceptQueue
+	for low < high {
+		candidate := low + (high-low+1)/2
+		candidateReserve, reserveErr := serverDescriptorReserve(result.workers, candidate)
+		if reserveErr != nil {
+			return config{}, reserveErr
+		}
+		candidateAvailable, limitErr := availableDescriptors(candidateReserve)
+		if limitErr != nil {
+			return config{}, limitErr
+		}
+		if candidateAvailable >= result.maxOpenWALStreams {
+			low = candidate
+		} else {
+			high = candidate - 1
+		}
+	}
+	result.acceptQueue = low
+	return result, nil
 }
 
 func loadTLSConfig(config config) (*tls.Config, error) {

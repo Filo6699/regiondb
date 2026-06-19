@@ -24,6 +24,9 @@ const (
 	headerBytes          = 44
 	checksumSize         = 4
 	chunkTemporaryPrefix = ".regiondb-chunk-"
+	// StartupScanEntryLimit bounds the entries processed by stale
+	// temporary-file cleanup during one startup.
+	StartupScanEntryLimit = 100_000
 )
 
 var (
@@ -47,6 +50,7 @@ type Store struct {
 	walGroupFlushes      atomic.Uint64
 	walCheckpointFlushes atomic.Uint64
 	checkpointCount      atomic.Uint64
+	startupScanCapped    bool
 	closed               bool
 	atomicWriteFailpoint func(atomicWriteBoundary) error
 	walFailpoint         func(walBoundary) error
@@ -89,6 +93,10 @@ func (s *Store) RuntimeStats() storage.RuntimeStats {
 	}
 	stats.Checkpoints = s.checkpointCount.Load()
 	return stats
+}
+
+func (s *Store) StartupScanCapped() bool {
+	return s.startupScanCapped
 }
 
 func Open(root string, g geometry.Geometry) (*Store, error) {
@@ -153,7 +161,8 @@ func openStore(
 		}
 	}()
 
-	if err := reclaimStaleChunkTemporaryFiles(absoluteRoot); err != nil {
+	scan, err := reclaimStaleChunkTemporaryFiles(absoluteRoot, StartupScanEntryLimit)
+	if err != nil {
 		return nil, fmt.Errorf("reclaim stale chunk temporary files: %w", err)
 	}
 
@@ -178,8 +187,9 @@ func openStore(
 			options.MaxOpenWALHandles,
 			wal,
 		),
-		writerLock: lock,
-		cache:      newChunkCache(g, options.MaxLoadedChunks),
+		writerLock:        lock,
+		cache:             newChunkCache(g, options.MaxLoadedChunks),
+		startupScanCapped: scan.capped,
 	}
 	wal = nil
 	if err := store.recoverWAL(); err != nil {
@@ -471,11 +481,25 @@ func (s *Store) persistChunk(coord geometry.Coord, payload, presence []byte, syn
 	return nil
 }
 
-func reclaimStaleChunkTemporaryFiles(root string) error {
-	return filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+type startupScanResult struct {
+	entries int
+	capped  bool
+}
+
+func reclaimStaleChunkTemporaryFiles(root string, limit int) (startupScanResult, error) {
+	var result startupScanResult
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
+		if path == root {
+			return nil
+		}
+		if result.entries == limit {
+			result.capped = true
+			return filepath.SkipAll
+		}
+		result.entries++
 		if entry.IsDir() || !strings.HasPrefix(entry.Name(), chunkTemporaryPrefix) {
 			return nil
 		}
@@ -484,6 +508,7 @@ func reclaimStaleChunkTemporaryFiles(root string) error {
 		}
 		return nil
 	})
+	return result, err
 }
 
 func writeAtomic(

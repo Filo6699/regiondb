@@ -118,6 +118,33 @@ func TestOpenReclaimsStaleChunkTemporaryFiles(t *testing.T) {
 	}
 }
 
+func TestStaleTemporaryFileScanStopsAtLimit(t *testing.T) {
+	t.Parallel()
+
+	root := testTempDir(t)
+	for _, name := range []string{"a", "b", "c"} {
+		path := filepath.Join(root, chunkTemporaryPrefix+name)
+		if err := os.WriteFile(path, []byte("incomplete"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := reclaimStaleChunkTemporaryFiles(root, 2)
+	if err != nil {
+		t.Fatalf("reclaimStaleChunkTemporaryFiles() error = %v", err)
+	}
+	if result.entries != 2 || !result.capped {
+		t.Fatalf("startup scan result = %+v, want entries=2 capped=true", result)
+	}
+	matches, err := filepath.Glob(filepath.Join(root, chunkTemporaryPrefix+"*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("remaining temporary files = %v, want one file beyond the scan cap", matches)
+	}
+}
+
 func TestCrashAtomicReplaceBoundaries(t *testing.T) {
 	if os.Getenv("REGIONDB_ATOMIC_WRITE_CRASH_CHILD") == "1" {
 		runAtomicWriteCrashChild(t)

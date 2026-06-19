@@ -61,16 +61,14 @@ func (options Options) validated() (Options, error) {
 	if options.MaxOpenWALHandles == 0 {
 		options.MaxOpenWALHandles = DefaultMaxOpenWALHandles
 	}
-	if options.MaxOpenWALHandles < 0 {
-		return Options{}, errors.New("maximum open WAL handles must be positive")
-	}
-	if options.DescriptorReserve < 0 {
-		return Options{}, errors.New("descriptor reserve must not be negative")
-	}
-	options.MaxOpenWALHandles = clampWALStreamLimit(
+	effectiveWALHandles, err := EffectiveWALHandleLimit(
 		options.MaxOpenWALHandles,
-		walDescriptorBudget(options.DescriptorReserve),
+		options.DescriptorReserve,
 	)
+	if err != nil {
+		return Options{}, err
+	}
+	options.MaxOpenWALHandles = effectiveWALHandles
 	if options.WALGroupCommitUpdates == 0 {
 		options.WALGroupCommitUpdates = DefaultWALGroupCommitUpdates
 	}

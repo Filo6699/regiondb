@@ -31,3 +31,17 @@ func TestClampWALStreamLimit(t *testing.T) {
 		})
 	}
 }
+
+func TestEffectiveWALHandleLimitRejectsInvalidInput(t *testing.T) {
+	t.Parallel()
+
+	if _, err := EffectiveWALHandleLimit(0, 0); err == nil {
+		t.Fatal("EffectiveWALHandleLimit() accepted a zero handle limit")
+	}
+	if _, err := EffectiveWALHandleLimit(1, -1); err == nil {
+		t.Fatal("EffectiveWALHandleLimit() accepted a negative reserve")
+	}
+	if _, err := AvailableWALDescriptors(-1); err == nil {
+		t.Fatal("AvailableWALDescriptors() accepted a negative reserve")
+	}
+}

@@ -16,7 +16,7 @@ func walDescriptorBudget(additionalReserve int) int {
 	}
 	reserve := descriptorReserve + uint64(additionalReserve)
 	if reserve < descriptorReserve || limit.Cur <= reserve {
-		return 1
+		return 0
 	}
 	available := limit.Cur - reserve
 	maxInt := uint64(^uint(0) >> 1)

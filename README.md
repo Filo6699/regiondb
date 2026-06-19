@@ -27,9 +27,15 @@ in-memory LRU cache. `-max-open-wal-streams` bounds cached WAL file streams and
 is lowered automatically when the operating-system descriptor budget is
 smaller. On Unix, that budget reserves descriptors for the listener, active
 and queued sockets, logs, control files, directory scans, and atomic file
-replacement. `-workers`, `-accept-queue`, and `-max-line-bytes` bound
-connection processing, queued accepted connections, and command lines. The
-exact acknowledgement boundaries are defined in the storage format
+replacement. If the requested settings exceed the Unix limit, startup first
+reduces the pending accept queue and then the WAL stream cap. `-workers`,
+`-accept-queue`, and `-max-line-bytes` bound connection processing, queued
+accepted connections, and command lines.
+
+Writer startup processes at most 100,000 data-directory entries while removing
+stale chunk temporary files. If more entries are discovered, cleanup stops,
+startup continues, and the structured warning event `scan_capped` records the
+limit. The exact acknowledgement boundaries are defined in the storage format
 specification.
 
 The server listens on `127.0.0.1:4242` by default. Use `-listen` to select a
