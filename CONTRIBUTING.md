@@ -52,3 +52,23 @@ go build ./...
 
 Storage, recovery, protocol, concurrency, and performance changes require their
 focused suites in addition to the baseline gate.
+
+## CI portability
+
+Tests must assert application contracts rather than properties of one runner,
+kernel, or scheduler:
+
+- Do not rely on TCP send or receive buffer capacity. When a test exchanges
+  enough data for either peer to block, drive reads and writes concurrently or
+  use an explicit application-level handshake.
+- Do not infer connection identity or service order from dial completion,
+  `Accept` order, goroutine start order, or close completion. Synchronize the
+  state required by the test and compare order-independent outcomes unless the
+  protocol explicitly guarantees an order.
+- Concurrent tests must accept every worker interleaving allowed by the
+  contract. Use channels, barriers, or observed state transitions to establish
+  a required happens-before relationship; do not use sleeps to select one
+  schedule.
+- Timeouts bound a failed test; they are not synchronization. Keep
+  operating-system exceptions narrow and state the invariant that remains
+  portable across the CI matrix.
