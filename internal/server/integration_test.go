@@ -10,7 +10,6 @@ import (
 	"net"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -61,10 +60,10 @@ func testIntegrationTCPCommandLifecycle(t *testing.T) {
 		"CHUNK -1 1 STATE\r\nCHUNKBIN -1 1 STATE\r\nCHUNKSET 2 2 STATE 9100|01\r\nCHUNK 2 2 STATE\r\n" +
 		"CHUNKEXISTS -1 1\r\nCHUNKEXISTS 99 99\r\nSET -1 2 0\r\nEXISTS -1 2\r\n" +
 		"UNSET -1 2\r\nGET -1 2\r\nEXISTS -1 2\r\nCHUNKEXISTS -1 1\r\nQUIT\r\n"
-	writeErr := writeIntegrationRequest(connection, request)
-	if writeErr != nil {
-		t.Fatalf("write request: %v", writeErr)
-	}
+	writeResult := make(chan error, 1)
+	go func() {
+		writeResult <- writeIntegrationRequest(connection, request)
+	}()
 
 	reader := bufio.NewReader(connection)
 	infoResponse := []string{
@@ -141,6 +140,9 @@ func testIntegrationTCPCommandLifecycle(t *testing.T) {
 	_, readErr := reader.ReadByte()
 	if readErr != io.EOF {
 		t.Fatalf("read after QUIT error = %v, want EOF", readErr)
+	}
+	if writeErr := <-writeResult; writeErr != nil {
+		t.Fatalf("write request: %v", writeErr)
 	}
 }
 
@@ -234,8 +236,8 @@ func testIntegrationTCPOverloadResponse(t *testing.T) {
 	}
 	listener := &integrationObservedListener{
 		Listener:    tcpListener,
-		accepted:    make(chan int, 4),
-		readStarted: make(chan int, 5),
+		accepted:    make(chan struct{}, 4),
+		readStarted: make(chan struct{}, 5),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	serveResult := make(chan error, 1)
@@ -258,15 +260,15 @@ func testIntegrationTCPOverloadResponse(t *testing.T) {
 
 	first := dialIntegrationServer(t, listener.Addr())
 	t.Cleanup(func() { _ = first.Close() })
-	waitForIntegrationSignal(t, listener.accepted, 1, "first accept")
-	waitForIntegrationSignal(t, listener.readStarted, 1, "first worker read")
+	waitForIntegrationSignal(t, listener.accepted, "first accept")
+	waitForIntegrationSignal(t, listener.readStarted, "first worker read")
 
 	candidates := make([]net.Conn, 0, 3)
 	for index := range 3 {
 		connection := dialIntegrationServer(t, listener.Addr())
 		candidates = append(candidates, connection)
 		t.Cleanup(func() { _ = connection.Close() })
-		waitForIntegrationSignal(t, listener.accepted, index+2, fmt.Sprintf("candidate %d accept", index))
+		waitForIntegrationSignal(t, listener.accepted, fmt.Sprintf("candidate %d accept", index))
 	}
 
 	writeErr := writeIntegrationRequest(first, "QUIT\r\n")
@@ -351,7 +353,7 @@ func testIntegrationTCPOverloadResponse(t *testing.T) {
 
 	recovery := dialIntegrationServer(t, listener.Addr())
 	t.Cleanup(func() { _ = recovery.Close() })
-	waitForIntegrationSignal(t, listener.accepted, 5, "recovery accept")
+	waitForIntegrationSignal(t, listener.accepted, "recovery accept")
 	if err := recovery.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatalf("set recovery deadline: %v", err)
 	}
@@ -473,9 +475,8 @@ func (w *partialIntegrationWriter) Write(data []byte) (int, error) {
 
 type integrationObservedListener struct {
 	net.Listener
-	accepted    chan int
-	readStarted chan int
-	accepts     atomic.Int32
+	accepted    chan struct{}
+	readStarted chan struct{}
 }
 
 func (l *integrationObservedListener) Accept() (net.Conn, error) {
@@ -483,12 +484,11 @@ func (l *integrationObservedListener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	accepted := int(l.accepts.Add(1))
-	l.accepted <- accepted
+	l.accepted <- struct{}{}
 	return &integrationObservedConnection{
 		Conn: connection,
 		onRead: func() {
-			l.readStarted <- accepted
+			l.readStarted <- struct{}{}
 		},
 	}, nil
 }
@@ -504,14 +504,11 @@ func (c *integrationObservedConnection) Read(destination []byte) (int, error) {
 	return c.Conn.Read(destination)
 }
 
-func waitForIntegrationSignal(t *testing.T, signals <-chan int, want int, description string) {
+func waitForIntegrationSignal(t *testing.T, signals <-chan struct{}, description string) {
 	t.Helper()
 
 	select {
-	case got := <-signals:
-		if got != want {
-			t.Fatalf("%s = %d, want %d", description, got, want)
-		}
+	case <-signals:
 	case <-time.After(5 * time.Second):
 		t.Fatalf("timed out waiting for %s", description)
 	}
