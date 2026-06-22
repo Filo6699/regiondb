@@ -2,11 +2,11 @@
 
 package fs_split
 
-// Windows has no RLIMIT_NOFILE equivalent. Keep the WAL pool within a
-// conservative measured process-handle budget while leaving headroom for
-// non-WAL and runtime-owned handles.
-const windowsWALStreamBudget = 64
+// Go opens files as native Windows handles, so the C runtime stdio stream
+// limit does not apply. Keep the WAL pool within a conservative application
+// budget instead; native Windows tests exercise the relevant handle behavior.
+const windowsWALHandleBudget = 64
 
 func walDescriptorBudget(_ int) int {
-	return windowsWALStreamBudget
+	return windowsWALHandleBudget
 }
