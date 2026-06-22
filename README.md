@@ -28,9 +28,11 @@ is lowered automatically when the operating-system descriptor budget is
 smaller. On Unix, that budget reserves descriptors for the listener, active
 and queued sockets, logs, control files, directory scans, and atomic file
 replacement. If the requested settings exceed the Unix limit, startup first
-reduces the pending accept queue and then the WAL stream cap. `-workers`,
-`-accept-queue`, and `-max-line-bytes` bound connection processing, queued
-accepted connections, and command lines.
+reduces the pending accept queue and then the WAL stream cap. Windows uses
+native file handles rather than the C runtime stdio table and conservatively
+caps the WAL pool at 64 handles. `-workers`, `-accept-queue`, and
+`-max-line-bytes` bound connection processing, queued accepted connections,
+and command lines.
 
 Writer startup processes at most 100,000 data-directory entries while removing
 stale chunk temporary files. If more entries are discovered, cleanup stops,

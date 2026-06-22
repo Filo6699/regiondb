@@ -73,8 +73,12 @@ reports that file synchronization is unsupported, the operation fails instead
 of falling back to a weaker durability mode.
 
 `-max-open-wal-streams` defaults to two. Windows has no `RLIMIT_NOFILE`
-equivalent, so larger values are conservatively clamped to 64 cached WAL
-handles, leaving headroom for non-WAL and runtime-owned handles.
+equivalent. Go opens `os.File` values as native Windows handles rather than
+through the C runtime stdio table, so the stdio stream limit and its adjustment
+functions do not govern regiondb. Larger values are conservatively clamped to
+64 cached WAL handles, leaving headroom for non-WAL and runtime-owned handles.
+The Windows test suite opens more than 512 native file handles to keep that
+platform distinction explicit.
 
 Do not place an active data directory on a network share or in a directory
 synchronized by another program. Filesystems and filter drivers can provide

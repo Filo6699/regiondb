@@ -72,3 +72,16 @@ kernel, or scheduler:
 - Timeouts bound a failed test; they are not synchronization. Keep
   operating-system exceptions narrow and state the invariant that remains
   portable across the CI matrix.
+
+File-resource tests and limits must follow the target operating system:
+
+- Linux and macOS expose `RLIMIT_NOFILE`. The storage budget subtracts fixed
+  process headroom and server-owned listener, worker, and queued-connection
+  descriptors from the current soft limit.
+- Windows `os.File` values own native handles, not C runtime stdio streams.
+  Windows has no `RLIMIT_NOFILE` equivalent, so the WAL pool uses a
+  conservative 64-handle application cap. Native tests verify that the Go file
+  path can exceed the unrelated 512-stream stdio boundary.
+- Do not copy a numeric descriptor limit or a limit-adjustment API between
+  operating systems. Tests that lower `RLIMIT_NOFILE` are Unix-only; Windows
+  tests exercise native handle allocation and the application cap.
