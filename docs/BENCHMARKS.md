@@ -99,6 +99,35 @@ suites remain in their dedicated validation gates. Benchmark executables,
 working data, and generated artifacts are staged under the runner temporary
 directory, and the workflow fails if a run changes the source checkout.
 
+## Sparse-write characteristic
+
+The production `fs_split_v1` layout stores each regular chunk in a separate
+file. A write appends its WAL record, creates and closes a complete temporary
+chunk file, and atomically replaces the published chunk file. The selected
+durability mode may add synchronization. A workload that writes many distinct,
+widely separated chunks therefore drives filesystem metadata operations and
+grows the number of directory entries and files with the number of populated
+chunks. This is a structural cost of the file-per-chunk layout, not by itself a
+correctness bug.
+
+Treat wrong readback, a missing acknowledged update, checksum or recovery
+failure, and an unexpected write error as correctness problems. Investigate
+those independently with the regular test and crash/recovery gates. If
+readback and recovery remain correct but sparse-write latency or throughput is
+unacceptable, characterize the deployment with the intended geometry,
+durability mode, filesystem, storage device, and populated-chunk count. Plan
+inode or equivalent file-record capacity and metadata I/O for the expected
+number of chunk files, and monitor data-directory growth. Increasing the
+in-memory chunk limit can reduce later read reloads, but it does not remove the
+temporary-file and atomic-replacement work of a chunk write.
+
+The separately documented
+[`fs_region_v1` layout](EXPERIMENTAL_REGION_FORMAT.md) explores a different
+file layout and has A/B benchmark evidence. It remains opt-in, is not
+server-selectable or production-supported, and has no durability, migration,
+or compatibility guarantee. Its results are diagnostic evidence, not guidance
+to move production data away from `fs_split_v1`.
+
 The [measured baseline](benchmarks/measured-baseline-2026-07-30.md) records a
 specific local environment, command, commit, and raw artifact. It is suitable
 only as a reproducible point of reference under comparable conditions.
