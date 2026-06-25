@@ -89,14 +89,15 @@ The current contracts are documented in:
 - [Terminology](docs/TERMINOLOGY.md)
 - [Protocol specification](docs/PROTOCOL.md)
 - [Storage format](docs/STORAGE_FORMAT.md)
+- [Stable compatibility policy](docs/COMPATIBILITY.md)
 - [Concurrency model](docs/CONCURRENCY.md)
 - [Scenario benchmarks](docs/BENCHMARKS.md)
 - [Docker](docs/DOCKER.md)
 - [Windows guide](docs/WINDOWS.md)
-- [Release notes](docs/releases/v0.1.1-preview.md)
+- [Release notes](docs/releases/v1.0.0.md)
 
-The `preview` label identifies the current prerelease channel. The
-implementation remains at engineering-alpha maturity.
+`v1.0.0` is the stable release line. Its declared on-disk readability, wire
+protocol, durability, and CLI surfaces follow SemVer.
 
 ## Scenario benchmarks
 

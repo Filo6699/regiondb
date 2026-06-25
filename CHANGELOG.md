@@ -2,6 +2,35 @@
 
 All notable changes to regiondb are documented in this file.
 
+## [1.0.0] - 2026-06-25
+
+### Added
+
+- Stable SemVer contracts for `fs_split_v1` readability, text protocol version
+  1, durability acknowledgement boundaries, and the server CLI.
+- Ordered `MSET` and `MGET` batch operations, exact chunk presence-state
+  transfer, and frozen compatibility fixtures for every supported chunk and
+  WAL generation.
+
+### Changed
+
+- The release channel is now stable and production-facing; experimental
+  storage remains opt-in and outside compatibility guarantees.
+- Runtime resource limits, protocol validation, storage recovery, and
+  cross-platform descriptor behavior are hardened for the stable boundary.
+
+### Validation
+
+- The release gate covers Linux, macOS, and Windows builds and tests, race,
+  lint, CodeQL, integration, repeated stress, durability crash/recovery,
+  archive installation smoke, checksums, SBOMs, and format fixtures.
+
+### Release status
+
+This is the first stable release. The declared compatibility surfaces follow
+SemVer; internal packages, the experimental backend, distributed features,
+cross-chunk transactions, and unverified platform modes remain excluded.
+
 ## [0.1.1-preview] - 2026-05-08
 
 ### Added
@@ -76,6 +105,7 @@ interface, and Go API are not stable compatibility commitments.
 This is an engineering alpha. Its wire protocol, on-disk format, command-line
 interface, and Go API are not stable compatibility commitments.
 
+[1.0.0]: https://github.com/Filo6699/regiondb/releases/tag/v1.0.0
 [0.1.1-preview]: https://github.com/Filo6699/regiondb/releases/tag/v0.1.1-preview
 [0.1.1-alpha]: https://github.com/Filo6699/regiondb/releases/tag/v0.1.1-alpha
 [0.1.0-alpha]: https://github.com/Filo6699/regiondb/releases/tag/v0.1.0-alpha
