@@ -74,6 +74,39 @@ func TestSerializeCommand(t *testing.T) {
 	}
 }
 
+func FuzzParseFrame(f *testing.F) {
+	for _, frame := range [][]byte{
+		[]byte("PING\r\n"),
+		[]byte("SET -12 34 7\r\n"),
+		[]byte("GET  1 2\r\n"),
+		{0xff, '\r', '\n'},
+	} {
+		f.Add(frame)
+	}
+
+	f.Fuzz(func(t *testing.T, frame []byte) {
+		command, err := ParseFrame(frame)
+		if err != nil {
+			if !errors.Is(err, ErrInvalidFrame) {
+				t.Fatalf("ParseFrame() error = %v, want ErrInvalidFrame", err)
+			}
+			return
+		}
+
+		serialized, err := SerializeCommand(command.Name, command.Args...)
+		if err != nil {
+			t.Fatalf("SerializeCommand() rejected parsed command: %v", err)
+		}
+		roundTrip, err := ParseFrame(serialized)
+		if err != nil {
+			t.Fatalf("ParseFrame() rejected serialized command: %v", err)
+		}
+		if !reflect.DeepEqual(roundTrip, command) {
+			t.Fatalf("round trip = %#v, want %#v", roundTrip, command)
+		}
+	})
+}
+
 func BenchmarkParseFrameReuse(b *testing.B) {
 	frame := []byte("SET -12 34 7\r\n")
 	scratch := make([]string, 0, 4)

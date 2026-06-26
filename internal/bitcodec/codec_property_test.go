@@ -68,6 +68,45 @@ func TestCodecPropertyRoundTripMatchesBitOracle(t *testing.T) {
 	}
 }
 
+func FuzzCodecRoundTrip(f *testing.F) {
+	f.Add(uint8(1), uint8(LSBFirst), uint16(1), uint16(0), uint64(1))
+	f.Add(uint8(5), uint8(MSBFirst), uint16(129), uint16(128), uint64(31))
+	f.Add(uint8(64), uint8(LSBFirst), uint16(8), uint16(7), uint64(math.MaxUint64))
+
+	f.Fuzz(func(t *testing.T, width uint8, rawOrder uint8, rawCount, rawIndex uint16, value uint64) {
+		width = width%64 + 1
+		order := Order(rawOrder % 2)
+		count := uint64(rawCount%256) + 1
+		index := uint64(rawIndex) % count
+		if width < 64 {
+			value &= uint64(1)<<width - 1
+		}
+
+		codec, err := New(width, order)
+		if err != nil {
+			t.Fatal(err)
+		}
+		size, err := codec.PackedBytes(count)
+		if err != nil {
+			t.Fatal(err)
+		}
+		packed := make([]byte, size)
+		if err := codec.Set(packed, index, value); err != nil {
+			t.Fatal(err)
+		}
+		got, err := codec.Get(packed, index)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != value {
+			t.Fatalf("Get(%d) = %x, want %x", index, got, value)
+		}
+		if want := getBitsOracle(packed, index, width, order); got != want {
+			t.Fatalf("Get(%d) = %x, oracle = %x", index, got, want)
+		}
+	})
+}
+
 func setBitsOracle(data []byte, index uint64, width uint8, order Order, value uint64) {
 	start := index * uint64(width)
 	for fieldBit := uint64(0); fieldBit < uint64(width); fieldBit++ {
