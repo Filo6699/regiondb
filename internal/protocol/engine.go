@@ -25,6 +25,7 @@ type Engine struct {
 	geometry geometry.Geometry
 	store    ChunkStore
 	token    string
+	auth     bool
 	mu       sync.RWMutex
 }
 
@@ -34,9 +35,18 @@ type Session struct {
 	closed        bool
 	commandArgs   []string
 	handleMu      sync.Mutex
+	authFailed    bool
 }
 
 func NewEngine(g geometry.Geometry, store ChunkStore, token string) (*Engine, error) {
+	return newEngine(g, store, token, true)
+}
+
+func NewEngineWithoutAuth(g geometry.Geometry, store ChunkStore) (*Engine, error) {
+	return newEngine(g, store, "", false)
+}
+
+func newEngine(g geometry.Geometry, store ChunkStore, token string, auth bool) (*Engine, error) {
 	validated, err := geometry.New(g.Config())
 	if err != nil || validated != g {
 		return nil, fmt.Errorf("create protocol engine: %w", geometry.ErrInvalid)
@@ -44,7 +54,7 @@ func NewEngine(g geometry.Geometry, store ChunkStore, token string) (*Engine, er
 	if store == nil {
 		return nil, errors.New("create protocol engine: chunk store must not be nil")
 	}
-	if token == "" {
+	if auth && token == "" {
 		return nil, errors.New("create protocol engine: authentication token must not be empty")
 	}
 	for _, character := range []byte(token) {
@@ -52,13 +62,14 @@ func NewEngine(g geometry.Geometry, store ChunkStore, token string) (*Engine, er
 			return nil, errors.New("create protocol engine: authentication token must be printable ASCII without spaces")
 		}
 	}
-	return &Engine{geometry: g, store: store, token: token}, nil
+	return &Engine{geometry: g, store: store, token: token, auth: auth}, nil
 }
 
 func (e *Engine) NewSession() *Session {
 	return &Session{
-		engine:      e,
-		commandArgs: make([]string, 0, 4),
+		engine:        e,
+		authenticated: !e.auth,
+		commandArgs:   make([]string, 0, 4),
 	}
 }
 
@@ -70,9 +81,14 @@ func (s *Session) Closed() bool {
 	return s.closed
 }
 
+func (s *Session) AuthenticationFailed() bool {
+	return s.authFailed
+}
+
 func (s *Session) Handle(frame []byte) Response {
 	s.handleMu.Lock()
 	defer s.handleMu.Unlock()
+	s.authFailed = false
 
 	if s.closed {
 		return errorResponse("CLOSED", "session is closed")
@@ -179,8 +195,13 @@ func (s *Session) authenticate(args []string) Response {
 	if response := requireArity(args, 1); response != nil {
 		return *response
 	}
+	if !s.engine.auth {
+		s.authenticated = true
+		return okResponse("")
+	}
 	if !tokensEqual(args[0], s.engine.token) {
 		s.authenticated = false
+		s.authFailed = true
 		return errorResponse("AUTH", "authentication failed")
 	}
 	s.authenticated = true

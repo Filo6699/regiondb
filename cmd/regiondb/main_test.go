@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"io"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,8 +67,123 @@ func TestParseConfig(t *testing.T) {
 		got.walGroupCommitUpdates != defaults.WALGroupCommitUpdates ||
 		got.workers != defaults.Workers() ||
 		got.acceptQueue != defaults.AcceptQueue ||
-		got.maxLineBytes != defaults.MaxLineBytes {
+		got.maxLineBytes != defaults.MaxLineBytes ||
+		got.idleTimeout != defaults.IdleTimeout ||
+		got.requestTimeout != defaults.RequestTimeout ||
+		got.responseTimeout != defaults.ResponseTimeout ||
+		got.authFailureDelay != defaults.AuthFailureDelay ||
+		got.authFailureLimit != defaults.AuthFailureLimit ||
+		got.authBanDuration != defaults.AuthBanDuration {
 		t.Fatalf("parseConfig() options = %+v", got)
+	}
+}
+
+func TestParseConfigAuthenticationPrecedence(t *testing.T) {
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenFile, []byte("file-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("REGIONDB_TOKEN", "env-token")
+	base := []string{
+		"-data-dir", "data",
+		"-token-file", tokenFile,
+		"-chunk-edge", "1",
+		"-large-chunk-edge", "1",
+		"-block-bits", "1",
+	}
+
+	fromEnvironment, err := parseConfig(base, ioDiscard{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fromEnvironment.token != "env-token" {
+		t.Fatalf("environment token = %q, want env-token", fromEnvironment.token)
+	}
+
+	fromCLI, err := parseConfig(append(base, "-token", "cli-token"), ioDiscard{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fromCLI.token != "cli-token" {
+		t.Fatalf("CLI token = %q, want cli-token", fromCLI.token)
+	}
+
+	t.Setenv("REGIONDB_TOKEN", "")
+	if _, err := parseConfig(base, ioDiscard{}); err == nil {
+		t.Fatal("empty REGIONDB_TOKEN did not fail closed")
+	}
+	if err := os.Unsetenv("REGIONDB_TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+	fromFile, err := parseConfig(base, ioDiscard{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fromFile.token != "file-token" {
+		t.Fatalf("file token = %q, want file-token", fromFile.token)
+	}
+}
+
+func TestParseConfigExplicitNoAuth(t *testing.T) {
+	t.Setenv("REGIONDB_TOKEN", "ambient-token")
+	base := []string{
+		"-data-dir", "data",
+		"-no-auth",
+		"-chunk-edge", "1",
+		"-large-chunk-edge", "1",
+		"-block-bits", "1",
+	}
+	got, err := parseConfig(base, ioDiscard{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.noAuth || got.token != "" {
+		t.Fatalf("no-auth config = %+v", got)
+	}
+	if _, err := parseConfig(append(base, "-token", "secret"), ioDiscard{}); err == nil {
+		t.Fatal("-no-auth with -token succeeded")
+	}
+}
+
+func TestAuthenticationErrorsDoNotExposeSecret(t *testing.T) {
+	t.Setenv("REGIONDB_TOKEN", "secret value")
+	_, err := parseConfig([]string{
+		"-data-dir", "data",
+		"-chunk-edge", "1",
+		"-large-chunk-edge", "1",
+		"-block-bits", "1",
+	}, ioDiscard{})
+	if err == nil {
+		t.Fatal("invalid secret succeeded")
+	}
+	if strings.Contains(err.Error(), "secret value") {
+		t.Fatalf("error exposed secret: %q", err)
+	}
+}
+
+func TestLoopbackListenerDetection(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		address string
+		want    bool
+	}{
+		{address: "127.0.0.1:4242", want: true},
+		{address: "[::1]:4242", want: true},
+		{address: "0.0.0.0:4242", want: false},
+		{address: "[::]:4242", want: false},
+	} {
+		host, _, err := net.SplitHostPort(test.address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := isLoopbackListener(&net.TCPAddr{
+			IP:   net.ParseIP(host),
+			Port: 4242,
+		})
+		if got != test.want {
+			t.Fatalf("isLoopbackListener(%q) = %t, want %t", test.address, got, test.want)
+		}
 	}
 }
 
@@ -134,6 +250,12 @@ func TestParseConfigStorageOptions(t *testing.T) {
 		"-workers", "2",
 		"-accept-queue", "4",
 		"-max-line-bytes", "8192",
+		"-idle-timeout", "2s",
+		"-request-timeout", "3s",
+		"-response-timeout", "4s",
+		"-auth-failure-delay", "5ms",
+		"-auth-failure-limit", "6",
+		"-auth-ban-duration", "7s",
 	)
 	got, err := parseConfig(args, ioDiscard{})
 	if err != nil {
@@ -143,7 +265,13 @@ func TestParseConfigStorageOptions(t *testing.T) {
 		got.checkpointRecords != 7 || got.checkpointBytes != 4096 ||
 		got.maxLoadedChunks != 3 || got.maxOpenWALStreams != 1 ||
 		got.walGroupCommitUpdates != 5 || got.workers != 2 ||
-		got.acceptQueue != 4 || got.maxLineBytes != 8192 {
+		got.acceptQueue != 4 || got.maxLineBytes != 8192 ||
+		got.idleTimeout != 2*time.Second ||
+		got.requestTimeout != 3*time.Second ||
+		got.responseTimeout != 4*time.Second ||
+		got.authFailureDelay != 5*time.Millisecond ||
+		got.authFailureLimit != 6 ||
+		got.authBanDuration != 7*time.Second {
 		t.Fatalf("parseConfig() options = %+v", got)
 	}
 
@@ -157,6 +285,12 @@ func TestParseConfigStorageOptions(t *testing.T) {
 		{"-workers", "0"},
 		{"-accept-queue", "-1"},
 		{"-max-line-bytes", "0"},
+		{"-idle-timeout", "0"},
+		{"-request-timeout", "0"},
+		{"-response-timeout", "0"},
+		{"-auth-failure-delay", "0"},
+		{"-auth-failure-limit", "0"},
+		{"-auth-ban-duration", "0"},
 	} {
 		if _, err := parseConfig(append(append([]string(nil), base...), invalid...), ioDiscard{}); err == nil {
 			t.Fatalf("parseConfig(%q) succeeded", invalid)

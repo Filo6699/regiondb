@@ -14,10 +14,14 @@ worker when it sends no request. Once the first request byte arrives, a
 separate absolute deadline bounds the complete frame; receiving additional
 bytes does not extend it. Response draining has its own absolute deadline.
 Connections retain independent authentication and close state.
+Authentication failure accounting is shared by source address across
+connections. Its entries are removed after successful authentication. The
+table currently has no hard entry-count limit.
 
 Cancelling the server context closes the listener plus active and queued
-connections, then waits for all workers to return. Workers, queue capacity, and
-the maximum command line size are server startup settings.
+connections, then waits for all workers to return. Workers, queue capacity,
+the maximum command line size, I/O deadlines, and authentication delay/ban
+controls are server startup settings.
 
 Abnormal connection setup, read, and write termination emits a warning with a
 stable `phase` and `reason`. Reason classes are `timeout`, `peer_close`,

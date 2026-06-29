@@ -12,7 +12,9 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/Filo6699/regiondb/internal/defaults"
 	"github.com/Filo6699/regiondb/internal/geometry"
@@ -41,6 +43,8 @@ type config struct {
 	listenAddress         string
 	dataDir               string
 	token                 string
+	tokenFile             string
+	noAuth                bool
 	tlsCert               string
 	tlsKey                string
 	durability            fs_split.DurabilityMode
@@ -52,6 +56,12 @@ type config struct {
 	workers               int
 	acceptQueue           int
 	maxLineBytes          int
+	idleTimeout           time.Duration
+	requestTimeout        time.Duration
+	responseTimeout       time.Duration
+	authFailureDelay      time.Duration
+	authFailureLimit      int
+	authBanDuration       time.Duration
 	geometry              geometry.Config
 	version               bool
 }
@@ -128,7 +138,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnEr
 		}
 		logger.Info("storage", "closed")
 	}()
-	engine, err := protocol.NewEngine(g, store, config.token)
+	var engine *protocol.Engine
+	if config.noAuth {
+		engine, err = protocol.NewEngineWithoutAuth(g, store)
+	} else {
+		engine, err = protocol.NewEngine(g, store, config.token)
+	}
 	if err != nil {
 		logger.Error("protocol", "engine_initialization_failed")
 		return err
@@ -142,14 +157,26 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnEr
 		slog.String("address", listener.Addr().String()),
 		slog.Bool("tls", tlsConfig != nil),
 	)
+	if !isLoopbackListener(listener.Addr()) {
+		logger.Warn("server", "non_loopback_listener",
+			slog.Bool("authentication", !config.noAuth),
+			slog.Bool("tls", tlsConfig != nil),
+		)
+	}
 	defer func() {
 		_ = listener.Close()
 	}()
 	err = server.ServeWithOptions(ctx, listener, engine, server.Options{
-		Workers:      config.workers,
-		AcceptQueue:  config.acceptQueue,
-		MaxLineBytes: config.maxLineBytes,
-		Logger:       logger,
+		Workers:          config.workers,
+		AcceptQueue:      config.acceptQueue,
+		MaxLineBytes:     config.maxLineBytes,
+		IdleTimeout:      config.idleTimeout,
+		RequestTimeout:   config.requestTimeout,
+		ResponseTimeout:  config.responseTimeout,
+		AuthFailureDelay: config.authFailureDelay,
+		AuthFailureLimit: config.authFailureLimit,
+		AuthBanDuration:  config.authBanDuration,
+		Logger:           logger,
 	})
 	if err != nil {
 		logger.Error("server", "serve_failed")
@@ -256,6 +283,15 @@ func listen(address string, tlsConfig *tls.Config) (net.Listener, error) {
 	return listener, nil
 }
 
+func isLoopbackListener(address net.Addr) bool {
+	host, _, err := net.SplitHostPort(address.String())
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func parseConfig(args []string, stderr io.Writer) (config, error) {
 	flags := flag.NewFlagSet("regiondb", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -268,6 +304,8 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	flags.StringVar(&result.listenAddress, "listen", defaults.Address, "TCP listen address in host:port form")
 	flags.StringVar(&result.dataDir, "data-dir", "", "directory for chunk data")
 	flags.StringVar(&result.token, "token", "", "authentication token")
+	flags.StringVar(&result.tokenFile, "token-file", "", "file containing the authentication token")
+	flags.BoolVar(&result.noAuth, "no-auth", false, "disable authentication explicitly")
 	flags.StringVar(&result.tlsCert, "tls-cert", "", "PEM TLS certificate file")
 	flags.StringVar(&result.tlsKey, "tls-key", "", "PEM TLS private key file")
 	flags.StringVar(&durability, "durability", string(fs_split.DurabilityRelaxed), "durability mode: relaxed, fsync-wal, or fsync-checkpoint")
@@ -289,6 +327,12 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	flags.IntVar(&result.workers, "workers", defaults.Workers(), "number of connection workers")
 	flags.IntVar(&result.acceptQueue, "accept-queue", defaults.AcceptQueue, "maximum queued connections")
 	flags.IntVar(&result.maxLineBytes, "max-line-bytes", defaults.MaxLineBytes, "maximum command line size including CRLF")
+	flags.DurationVar(&result.idleTimeout, "idle-timeout", defaults.IdleTimeout, "maximum wait for the first request byte")
+	flags.DurationVar(&result.requestTimeout, "request-timeout", defaults.RequestTimeout, "maximum time to read one request")
+	flags.DurationVar(&result.responseTimeout, "response-timeout", defaults.ResponseTimeout, "maximum time to write one response")
+	flags.DurationVar(&result.authFailureDelay, "auth-failure-delay", defaults.AuthFailureDelay, "delay after a failed authentication attempt")
+	flags.IntVar(&result.authFailureLimit, "auth-failure-limit", defaults.AuthFailureLimit, "failed authentication attempts before a temporary ban")
+	flags.DurationVar(&result.authBanDuration, "auth-ban-duration", defaults.AuthBanDuration, "temporary authentication ban duration")
 	flags.Uint64Var(&chunkEdge, "chunk-edge", 0, "blocks per chunk edge")
 	flags.Uint64Var(&largeChunkEdge, "large-chunk-edge", 0, "chunks per large-chunk edge")
 	flags.Uint64Var(&blockBits, "block-bits", 0, "bits per block")
@@ -308,8 +352,12 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	if result.dataDir == "" {
 		return config{}, errors.New("-data-dir is required")
 	}
-	if result.token == "" {
-		return config{}, errors.New("-token is required")
+	provided := make(map[string]bool)
+	flags.Visit(func(current *flag.Flag) {
+		provided[current.Name] = true
+	})
+	if err := resolveAuthentication(&result, provided); err != nil {
+		return config{}, err
 	}
 	if (result.tlsCert == "") != (result.tlsKey == "") {
 		return config{}, errors.New("-tls-cert and -tls-key must be provided together")
@@ -344,6 +392,24 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	if result.maxLineBytes <= 0 {
 		return config{}, errors.New("-max-line-bytes must be positive")
 	}
+	if result.idleTimeout <= 0 {
+		return config{}, errors.New("-idle-timeout must be positive")
+	}
+	if result.requestTimeout <= 0 {
+		return config{}, errors.New("-request-timeout must be positive")
+	}
+	if result.responseTimeout <= 0 {
+		return config{}, errors.New("-response-timeout must be positive")
+	}
+	if result.authFailureDelay <= 0 {
+		return config{}, errors.New("-auth-failure-delay must be positive")
+	}
+	if result.authFailureLimit <= 0 {
+		return config{}, errors.New("-auth-failure-limit must be positive")
+	}
+	if result.authBanDuration <= 0 {
+		return config{}, errors.New("-auth-ban-duration must be positive")
+	}
 	if chunkEdge > math.MaxUint32 || largeChunkEdge > math.MaxUint32 || blockBits > math.MaxUint8 {
 		return config{}, errors.New("geometry flag value is out of range")
 	}
@@ -353,6 +419,50 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 		BlockBits:      uint8(blockBits),
 	}
 	return result, nil
+}
+
+func resolveAuthentication(result *config, provided map[string]bool) error {
+	if result.noAuth {
+		if provided["token"] || provided["token-file"] {
+			return errors.New("-no-auth cannot be combined with -token or -token-file")
+		}
+		result.token = ""
+		return nil
+	}
+	if provided["token"] {
+		return validateAuthenticationToken(result.token)
+	}
+	if token, ok := os.LookupEnv("REGIONDB_TOKEN"); ok {
+		if err := validateAuthenticationToken(token); err != nil {
+			return fmt.Errorf("invalid REGIONDB_TOKEN: %w", err)
+		}
+		result.token = token
+		return nil
+	}
+	if result.tokenFile != "" {
+		contents, err := os.ReadFile(result.tokenFile)
+		if err != nil {
+			return fmt.Errorf("read authentication token file: %w", err)
+		}
+		result.token = strings.TrimSuffix(strings.TrimSuffix(string(contents), "\n"), "\r")
+		if err := validateAuthenticationToken(result.token); err != nil {
+			return fmt.Errorf("invalid authentication token file: %w", err)
+		}
+		return nil
+	}
+	return errors.New("authentication requires -token, REGIONDB_TOKEN, -token-file, or explicit -no-auth")
+}
+
+func validateAuthenticationToken(token string) error {
+	if token == "" {
+		return errors.New("authentication token must not be empty")
+	}
+	for _, character := range []byte(token) {
+		if character < 0x21 || character > 0x7e {
+			return errors.New("authentication token must be printable ASCII without spaces")
+		}
+	}
+	return nil
 }
 
 func printVersion(w io.Writer) error {

@@ -99,6 +99,61 @@ func TestServePipelinedCommands(t *testing.T) {
 	}
 }
 
+func TestServeWithoutAuthentication(t *testing.T) {
+	t.Parallel()
+
+	g, err := geometry.New(geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := fs_split.Open(t.TempDir(), g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close(): %v", err)
+		}
+	})
+	engine, err := protocol.NewEngineWithoutAuth(g, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- Serve(ctx, listener, engine)
+	}()
+
+	connection, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(connection, "PING\r\n"); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	response, err := bufio.NewReader(connection).ReadString('\n')
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	if response != "+OK PONG\r\n" {
+		cancel()
+		t.Fatalf("response = %q", response)
+	}
+	_ = connection.Close()
+	cancel()
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestServePreservesPartialLinesAndMalformedBoundaries(t *testing.T) {
 	t.Parallel()
 

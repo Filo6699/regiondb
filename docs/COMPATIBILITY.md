@@ -62,13 +62,15 @@ last successful WAL sync.
 The stable executable name is `regiondb`. The following server flags, their
 value types, and their documented meanings are stable:
 
-- `-listen`, `-data-dir`, and `-token`;
+- `-listen`, `-data-dir`, `-token`, `-token-file`, and `-no-auth`;
 - `-tls-cert` and `-tls-key`;
 - `-chunk-edge`, `-large-chunk-edge`, and `-block-bits`;
 - `-durability`, `-checkpoint-records`, and `-checkpoint-bytes`;
 - `-max-loaded-chunks`, `-max-open-wal-streams`, and
   `-wal-group-commit-updates`;
 - `-workers`, `-accept-queue`, and `-max-line-bytes`;
+- `-idle-timeout`, `-request-timeout`, and `-response-timeout`;
+- `-auth-failure-delay`, `-auth-failure-limit`, and `-auth-ban-duration`;
 - `-version`.
 
 The defaults listed in the README are the `v1.0.0` defaults. A stable update

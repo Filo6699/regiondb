@@ -36,9 +36,13 @@ regiondb \
 The server listens on `127.0.0.1:4242` by default. Use `-listen` to select a
 different interface or port. Storage defaults to `relaxed`; select
 `fsync-wal` or `fsync-checkpoint` according to the acknowledgement guarantees
-in the [storage format](docs/STORAGE_FORMAT.md). Authentication, data
-directory, and geometry have no defaults and must be provided explicitly.
-Run `regiondb -help` for the complete option list.
+in the [storage format](docs/STORAGE_FORMAT.md). The authentication token is
+resolved in `-token`, `REGIONDB_TOKEN`, then `-token-file` precedence. Use
+`-no-auth` only when unauthenticated access is intentional; it overrides an
+ambient `REGIONDB_TOKEN` and cannot be combined with token flags. Data
+directory and geometry have no defaults and must be provided explicitly.
+Run `regiondb -help` for the complete option list. A non-loopback listener
+emits a warning without logging token or token-file contents.
 
 To enable TLS, provide both files from a PEM certificate/key pair:
 
@@ -57,6 +61,12 @@ The server rejects an incomplete or invalid TLS configuration before opening
 the data directory or listener. TLS listeners require TLS 1.2 or later.
 Connection URIs use `region://token@host:port/` for plaintext TCP and
 `regions://token@host:port/` for TLS.
+
+`-workers` and `-accept-queue` bound active and pending connections.
+`-idle-timeout`, `-request-timeout`, and `-response-timeout` bound socket I/O.
+Failed authentication is delayed per source address and temporarily banned
+according to `-auth-failure-delay`, `-auth-failure-limit`, and
+`-auth-ban-duration`.
 
 For container deployment, resource limits, platform-specific behavior, and
 benchmark operation, use the focused guides below.

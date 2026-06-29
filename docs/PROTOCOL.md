@@ -24,7 +24,11 @@ extend the request deadline.
 
 `AUTH` and `QUIT` may be sent before authentication. Every other command
 returns `NOAUTH` until authentication succeeds. A failed `AUTH` clears any
-previously authenticated state.
+previously authenticated state. Failed authentication responses are delayed
+per source address; repeated failures from one source trigger a temporary ban
+without delaying unrelated sources. When the server is started with explicit
+`-no-auth`, sessions begin authenticated and `AUTH` remains a successful
+no-op.
 
 ## Responses
 

@@ -72,6 +72,26 @@ func TestSessionAuthentication(t *testing.T) {
 	}
 }
 
+func TestSessionWithoutAuthentication(t *testing.T) {
+	t.Parallel()
+
+	g, err := geometry.New(geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &memoryStore{chunks: make(map[geometry.Coord]*storage.Chunk)}
+	engine, err := NewEngineWithoutAuth(g, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := engine.NewSession()
+	assertResponse(t, session, "PING\r\n", "+OK PONG\r\n")
+	assertResponse(t, session, "AUTH ignored\r\n", "+OK\r\n")
+	if !session.Authenticated() || session.AuthenticationFailed() {
+		t.Fatal("authentication-disabled session changed authentication state")
+	}
+}
+
 func TestSessionBlockAndChunkCommands(t *testing.T) {
 	t.Parallel()
 

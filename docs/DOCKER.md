@@ -62,6 +62,9 @@ for that budget. In particular:
   connection consumes socket and process resources.
 - `-max-line-bytes` bounds text command input, but binary chunk payload size is
   determined by the configured geometry.
+- `-idle-timeout`, `-request-timeout`, and `-response-timeout` bound socket
+  occupancy. Authentication failures are delayed and temporarily banned per
+  source according to the `-auth-failure-*` and `-auth-ban-duration` controls.
 
 Pass option overrides after the image name with `docker run`, or replace the
 Compose service `command`. Keep geometry identical when reopening an existing

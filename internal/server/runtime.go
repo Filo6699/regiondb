@@ -29,13 +29,16 @@ const (
 )
 
 type Options struct {
-	Workers         int
-	AcceptQueue     int
-	MaxLineBytes    int
-	IdleTimeout     time.Duration
-	RequestTimeout  time.Duration
-	ResponseTimeout time.Duration
-	Logger          *logging.Logger
+	Workers          int
+	AcceptQueue      int
+	MaxLineBytes     int
+	IdleTimeout      time.Duration
+	RequestTimeout   time.Duration
+	ResponseTimeout  time.Duration
+	AuthFailureDelay time.Duration
+	AuthFailureLimit int
+	AuthBanDuration  time.Duration
+	Logger           *logging.Logger
 }
 
 type terminationReason string
@@ -58,12 +61,15 @@ type connectionTermination struct {
 
 func DefaultOptions() Options {
 	return Options{
-		Workers:         defaults.Workers(),
-		AcceptQueue:     DefaultAcceptQueue,
-		MaxLineBytes:    DefaultMaxLineBytes,
-		IdleTimeout:     DefaultIdleTimeout,
-		RequestTimeout:  DefaultRequestTimeout,
-		ResponseTimeout: DefaultResponseTimeout,
+		Workers:          defaults.Workers(),
+		AcceptQueue:      DefaultAcceptQueue,
+		MaxLineBytes:     DefaultMaxLineBytes,
+		IdleTimeout:      DefaultIdleTimeout,
+		RequestTimeout:   DefaultRequestTimeout,
+		ResponseTimeout:  DefaultResponseTimeout,
+		AuthFailureDelay: defaults.AuthFailureDelay,
+		AuthFailureLimit: defaults.AuthFailureLimit,
+		AuthBanDuration:  defaults.AuthBanDuration,
 	}
 }
 
@@ -120,6 +126,24 @@ func ServeWithOptions(
 	if options.ResponseTimeout == 0 {
 		options.ResponseTimeout = DefaultResponseTimeout
 	}
+	if options.AuthFailureDelay < 0 {
+		return errors.New("serve: authentication failure delay must not be negative")
+	}
+	if options.AuthFailureDelay == 0 {
+		options.AuthFailureDelay = defaults.AuthFailureDelay
+	}
+	if options.AuthFailureLimit < 0 {
+		return errors.New("serve: authentication failure limit must not be negative")
+	}
+	if options.AuthFailureLimit == 0 {
+		options.AuthFailureLimit = defaults.AuthFailureLimit
+	}
+	if options.AuthBanDuration < 0 {
+		return errors.New("serve: authentication ban duration must not be negative")
+	}
+	if options.AuthBanDuration == 0 {
+		options.AuthBanDuration = defaults.AuthBanDuration
+	}
 
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -133,6 +157,11 @@ func ServeWithOptions(
 	var connections sync.Map
 	var shutdownOnce sync.Once
 	var workers sync.WaitGroup
+	authFailures := newAuthFailureTracker(
+		options.AuthFailureDelay,
+		options.AuthFailureLimit,
+		options.AuthBanDuration,
+	)
 	shutdown := func() {
 		shutdownOnce.Do(func() {
 			_ = listener.Close()
@@ -175,6 +204,7 @@ func ServeWithOptions(
 						options.IdleTimeout,
 						options.RequestTimeout,
 						options.ResponseTimeout,
+						authFailures,
 					)
 					logConnectionTermination(options.Logger, termination)
 					connections.Delete(connection)
@@ -260,7 +290,16 @@ func serveConnection(
 	idleTimeout time.Duration,
 	requestTimeout time.Duration,
 	responseTimeout time.Duration,
+	trackers ...*authFailureTracker,
 ) connectionTermination {
+	authFailures := newAuthFailureTracker(
+		defaults.AuthFailureDelay,
+		defaults.AuthFailureLimit,
+		defaults.AuthBanDuration,
+	)
+	if len(trackers) != 0 {
+		authFailures = trackers[0]
+	}
 	if err := handshakeTLSWithin(ctx, connection, requestTimeout); err != nil {
 		return classifyConnectionTermination(ctx, connection, "tls_handshake", err, true)
 	}
@@ -270,7 +309,14 @@ func serveConnection(
 	reader := newLineBuffer(maxLineBytes)
 	writer := bufio.NewWriter(connection)
 	session := engine.NewSession()
+	source := authSource(connection)
 	for {
+		if !session.Authenticated() && authFailures.banned(source, time.Now()) {
+			return connectionTermination{
+				phase:  "authentication",
+				reason: terminationProtocolClose,
+			}
+		}
 		frame, tooLong, err := reader.readFrameWithin(
 			connection,
 			idleTimeout,
@@ -307,10 +353,22 @@ func serveConnection(
 			}
 		}
 
+		wasAuthenticated := session.Authenticated()
+		response := session.Handle(frame)
+		if session.AuthenticationFailed() {
+			if err := waitForAuthPenalty(
+				ctx,
+				authFailures.registerFailure(source, time.Now()),
+			); err != nil {
+				return classifyConnectionTermination(ctx, connection, "auth_delay", err, false)
+			}
+		} else if !wasAuthenticated && session.Authenticated() {
+			authFailures.authenticated(source)
+		}
 		if err := writeResponseWithin(
 			connection,
 			writer,
-			session.Handle(frame).Bytes(),
+			response.Bytes(),
 			responseTimeout,
 		); err != nil {
 			return classifyConnectionTermination(ctx, connection, "write", err, true)
