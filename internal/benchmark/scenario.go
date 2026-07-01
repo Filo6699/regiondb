@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"math/rand"
 	"sort"
 	"time"
@@ -231,8 +230,17 @@ func summarize(latencies []time.Duration) Latencies {
 }
 
 func percentile(sorted []time.Duration, percent int) time.Duration {
-	rank := int(math.Ceil(float64(percent)*float64(len(sorted))/100)) - 1
-	return sorted[rank]
+	scaledRank := percent * (len(sorted) - 1)
+	lower := scaledRank / 100
+	remainder := scaledRank % 100
+	if remainder == 0 {
+		return sorted[lower]
+	}
+
+	difference := sorted[lower+1] - sorted[lower]
+	interpolation := difference/100*time.Duration(remainder) +
+		difference%100*time.Duration(remainder)/100
+	return sorted[lower] + interpolation
 }
 
 func coordinate(index int) geometry.Coord {

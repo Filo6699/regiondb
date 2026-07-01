@@ -89,23 +89,52 @@ func TestRunReportsOperationCountsAndPercentiles(t *testing.T) {
 	}
 }
 
-func TestSummarizeUsesNearestRankPercentiles(t *testing.T) {
+func TestSummarizeInterpolatesPercentiles(t *testing.T) {
 	t.Parallel()
 
-	latencies := make([]time.Duration, 100)
-	for index := range latencies {
-		latencies[index] = time.Duration(index+1) * time.Nanosecond
+	tests := []struct {
+		name      string
+		latencies []time.Duration
+		want      Latencies
+	}{
+		{
+			name:      "single sample",
+			latencies: []time.Duration{37 * time.Nanosecond},
+			want: Latencies{
+				Minimum: 37,
+				P50:     37,
+				P95:     37,
+				P99:     37,
+				Maximum: 37,
+			},
+		},
+		{
+			name: "interpolated ranks",
+			latencies: []time.Duration{
+				100 * time.Nanosecond,
+				0,
+				400 * time.Nanosecond,
+				200 * time.Nanosecond,
+			},
+			want: Latencies{
+				Minimum: 0,
+				P50:     150,
+				P95:     370,
+				P99:     394,
+				Maximum: 400,
+			},
+		},
 	}
-	got := summarize(latencies)
-	want := (Latencies{
-		Minimum: 1,
-		P50:     50,
-		P95:     95,
-		P99:     99,
-		Maximum: 100,
-	})
-	if got != want {
-		t.Fatalf("summarize() = %+v, want %+v", got, want)
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := summarize(test.latencies)
+			if got != test.want {
+				t.Fatalf("summarize() = %+v, want %+v", got, test.want)
+			}
+		})
 	}
 }
 
