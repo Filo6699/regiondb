@@ -123,3 +123,33 @@ jobs:
 
       - name: Run fuzz and checkptr smoke tests
         run: scripts/test/hardened.sh
+
+  docker:
+    name: health-smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build image
+        run: docker build --tag regiondb:health-smoke .
+
+      - name: Start image without a token
+        run: docker run --detach --name regiondb-health-smoke regiondb:health-smoke
+
+      - name: Wait for healthy status
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'docker logs regiondb-health-smoke; docker rm --force regiondb-health-smoke' EXIT
+          for attempt in {1..30}; do
+            status="$(docker inspect --format '{{.State.Health.Status}}' regiondb-health-smoke)"
+            if [[ "$status" == "healthy" ]]; then
+              exit 0
+            fi
+            if [[ "$status" == "unhealthy" ]]; then
+              exit 1
+            fi
+            sleep 1
+          done
+          exit 1

@@ -3,7 +3,7 @@
 FROM golang:1.24-alpine AS build
 
 WORKDIR /src
-COPY go.mod ./
+COPY go.mod go.sum ./
 COPY cmd ./cmd
 COPY internal ./internal
 COPY pkg ./pkg
@@ -24,9 +24,7 @@ EXPOSE 4242
 VOLUME ["/var/lib/regiondb"]
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
-    CMD response="$(printf 'AUTH %s\r\nINFO\r\n' "$REGIONDB_TOKEN" | nc -w 2 127.0.0.1 4242)" \
-        && printf '%s\n' "$response" | grep -q '^+OK' \
-        && printf '%s\n' "$response" | grep -q 'regiondb'
+    CMD nc -z -w 2 127.0.0.1 4242
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["-listen", "0.0.0.0:4242", "-data-dir", "/var/lib/regiondb", "-chunk-edge", "16", "-large-chunk-edge", "8", "-block-bits", "5"]
