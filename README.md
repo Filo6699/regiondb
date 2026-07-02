@@ -78,6 +78,7 @@ The current contracts are documented in:
 - [Storage format](docs/STORAGE_FORMAT.md)
 - [Stable compatibility policy](docs/COMPATIBILITY.md)
 - [Concurrency model](docs/CONCURRENCY.md)
+- [Runtime hardening controls](docs/RUNTIME_HARDENING.md)
 - [Scenario benchmarks](docs/BENCHMARKS.md)
 - [Docker](docs/DOCKER.md)
 - [Windows guide](docs/WINDOWS.md)
