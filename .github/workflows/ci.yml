@@ -53,6 +53,9 @@ jobs:
 
       - name: Report Go environment
         if: runner.os == 'Windows'
+        # Hosted Windows images can reject this diagnostic platform probe.
+        # The quick gate below remains blocking for every build and test error.
+        continue-on-error: true
         run: go env
 
       - name: Run quick gate
