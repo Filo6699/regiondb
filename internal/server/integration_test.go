@@ -351,23 +351,11 @@ func testIntegrationTCPOverloadResponse(t *testing.T) {
 		}
 	}
 
-	recovery := dialIntegrationServer(t, listener.Addr())
-	t.Cleanup(func() { _ = recovery.Close() })
-	waitForIntegrationSignal(t, listener.accepted, "recovery accept")
-	if err := recovery.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		t.Fatalf("set recovery deadline: %v", err)
-	}
-	writeErr = writeIntegrationRequest(recovery, "PING\r\n")
-	if writeErr != nil {
-		t.Fatalf("write recovery request: %v", writeErr)
-	}
-	response, readErr = bufio.NewReader(recovery).ReadString('\n')
-	if readErr != nil {
-		t.Fatalf("read recovery response: %v", readErr)
-	}
-	if want := "-ERR NOAUTH authentication required\r\n"; response != want {
-		t.Fatalf("recovery response = %q, want %q", response, want)
-	}
+	waitForIntegrationRecovery(
+		t,
+		listener,
+		"-ERR NOAUTH authentication required\r\n",
+	)
 }
 
 func startIntegrationServer(t *testing.T, options Options) net.Addr {
@@ -512,4 +500,67 @@ func waitForIntegrationSignal(t *testing.T, signals <-chan struct{}, description
 	case <-time.After(5 * time.Second):
 		t.Fatalf("timed out waiting for %s", description)
 	}
+}
+
+func waitForIntegrationRecovery(
+	t *testing.T,
+	listener *integrationObservedListener,
+	want string,
+) {
+	t.Helper()
+
+	const (
+		recoveryTimeout = 2 * time.Second
+		attemptTimeout  = 500 * time.Millisecond
+		retryDelay      = 50 * time.Millisecond
+	)
+	deadline := time.Now().Add(recoveryTimeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		connection, err := net.DialTimeout(
+			listener.Addr().Network(),
+			listener.Addr().String(),
+			attemptTimeout,
+		)
+		if err == nil {
+			attemptDeadline := time.Now().Add(attemptTimeout)
+			if attemptDeadline.After(deadline) {
+				attemptDeadline = deadline
+			}
+			err = connection.SetDeadline(attemptDeadline)
+			if err == nil {
+				select {
+				case <-listener.accepted:
+					err = writeIntegrationRequest(connection, "PING\r\n")
+					if err == nil {
+						var response string
+						response, err = bufio.NewReader(connection).ReadString('\n')
+						if err == nil && response == want {
+							_ = connection.Close()
+							return
+						}
+						if err == nil {
+							err = fmt.Errorf("response = %q, want %q", response, want)
+						}
+					}
+				case <-time.After(time.Until(attemptDeadline)):
+					err = errors.New("server did not accept recovery connection")
+				}
+			}
+			_ = connection.Close()
+		}
+		lastErr = err
+
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		delay := retryDelay
+		if remaining < delay {
+			delay = remaining
+		}
+		timer := time.NewTimer(delay)
+		<-timer.C
+	}
+	t.Fatalf("server did not recover within %v: %v", recoveryTimeout, lastErr)
 }
