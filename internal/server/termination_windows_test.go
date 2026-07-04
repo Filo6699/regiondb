@@ -40,3 +40,7 @@ func TestWindowsConnectionAbortIsClassifiedAsPeerClose(t *testing.T) {
 		}
 	}
 }
+
+func platformPeerCloseTestError() error {
+	return syscall.WSAECONNRESET
+}

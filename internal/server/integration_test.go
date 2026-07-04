@@ -533,14 +533,22 @@ func waitForIntegrationRecovery(
 				case <-listener.accepted:
 					err = writeIntegrationRequest(connection, "PING\r\n")
 					if err == nil {
-						var response string
-						response, err = bufio.NewReader(connection).ReadString('\n')
-						if err == nil && response == want {
+						response, received, readErr := readIntegrationLineWithin(
+							connection,
+							attemptDeadline,
+						)
+						if readErr != nil {
+							_ = connection.Close()
+							t.Fatalf("read recovery response: %v", readErr)
+						}
+						if received && response == want {
 							_ = connection.Close()
 							return
 						}
-						if err == nil {
+						if received {
 							err = fmt.Errorf("response = %q, want %q", response, want)
+						} else {
+							err = errors.New("recovery attempt ended without a line")
 						}
 					}
 				case <-time.After(time.Until(attemptDeadline)):
@@ -563,4 +571,80 @@ func waitForIntegrationRecovery(
 		<-timer.C
 	}
 	t.Fatalf("server did not recover within %v: %v", recoveryTimeout, lastErr)
+}
+
+func readIntegrationLineWithin(
+	connection net.Conn,
+	deadline time.Time,
+) (string, bool, error) {
+	if err := connection.SetReadDeadline(deadline); err != nil {
+		return "", false, fmt.Errorf("set timed read deadline: %w", err)
+	}
+	line, err := bufio.NewReader(connection).ReadString('\n')
+	if err == nil {
+		return line, true, nil
+	}
+	if isExpectedIntegrationReadEnd(err) {
+		return "", false, nil
+	}
+	return "", false, err
+}
+
+func isExpectedIntegrationReadEnd(err error) bool {
+	var networkError net.Error
+	return errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrClosedPipe) ||
+		errors.Is(err, net.ErrClosed) ||
+		errors.As(err, &networkError) && networkError.Timeout() ||
+		isPeerCloseError(err)
+}
+
+func TestReadIntegrationLineWithinClassifiesExpectedEnd(t *testing.T) {
+	t.Parallel()
+
+	unexpected := errors.New("unexpected read failure")
+	tests := []struct {
+		name    string
+		readErr error
+		wantErr error
+	}{
+		{name: "timeout", readErr: timeoutTestError{}},
+		{name: "peer reset", readErr: platformPeerCloseTestError()},
+		{name: "EOF", readErr: io.EOF},
+		{name: "unexpected", readErr: unexpected, wantErr: unexpected},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			connection := &integrationReadErrorConnection{readErr: test.readErr}
+			line, received, err := readIntegrationLineWithin(connection, time.Now())
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("readIntegrationLineWithin() error = %v, want %v", err, test.wantErr)
+			}
+			if line != "" || received {
+				t.Fatalf(
+					"readIntegrationLineWithin() = (%q, %t), want no line",
+					line,
+					received,
+				)
+			}
+			if connection.readDeadlines != 1 {
+				t.Fatalf("SetReadDeadline() calls = %d, want 1", connection.readDeadlines)
+			}
+		})
+	}
+}
+
+type integrationReadErrorConnection struct {
+	net.Conn
+	readErr       error
+	readDeadlines int
+}
+
+func (c *integrationReadErrorConnection) Read([]byte) (int, error) {
+	return 0, c.readErr
+}
+
+func (c *integrationReadErrorConnection) SetReadDeadline(time.Time) error {
+	c.readDeadlines++
+	return nil
 }
