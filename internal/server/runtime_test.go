@@ -591,41 +591,74 @@ func TestTLSHandshakeDeadlineIsAbsoluteForTrickleClient(t *testing.T) {
 	}
 }
 
-func TestResponseDeadlineBoundsDrain(t *testing.T) {
+func TestResponseDeadlineReleasesWorker(t *testing.T) {
 	t.Parallel()
 
 	engine := newTestEngine(t)
-	serverConnection, clientConnection := net.Pipe()
+	listener := newCountingListener()
+	sink := newRecordingSink()
+	logger := logging.NewWithSink(sink, time.Now)
+	ctx, cancel := context.WithCancel(context.Background())
+	serveResult := make(chan error, 1)
+	go func() {
+		serveResult <- ServeWithOptions(ctx, listener, engine, Options{
+			Workers:         1,
+			AcceptQueue:     1,
+			MaxLineBytes:    64,
+			IdleTimeout:     time.Second,
+			RequestTimeout:  time.Second,
+			ResponseTimeout: 100 * time.Millisecond,
+			Logger:          logger,
+		})
+	}()
 	t.Cleanup(func() {
-		_ = serverConnection.Close()
-		_ = clientConnection.Close()
+		cancel()
+		if err := <-serveResult; err != nil {
+			t.Errorf("ServeWithOptions() error = %v", err)
+		}
 	})
 
-	serveDone := make(chan connectionTermination, 1)
-	go func() {
-		defer func() { _ = serverConnection.Close() }()
-		serveDone <- serveConnection(
-			context.Background(),
-			serverConnection,
-			engine,
-			64,
-			time.Second,
-			time.Second,
-			100*time.Millisecond,
-		)
-	}()
-	_, writeErr := io.WriteString(clientConnection, "PING\r\n")
+	if started := sink.next(t); started.Message != "serve_started" {
+		t.Fatalf("start event = %q, want %q", started.Message, "serve_started")
+	}
+
+	slowServer, slowClient := net.Pipe()
+	waitForAccept(t, listener, 1)
+	listener.connections <- slowServer
+	t.Cleanup(func() { _ = slowClient.Close() })
+	_, writeErr := io.WriteString(slowClient, "PING\r\n")
 	if writeErr != nil {
 		t.Fatal(writeErr)
 	}
 
-	select {
-	case termination := <-serveDone:
-		if termination.phase != "write" || termination.reason != terminationTimeout {
-			t.Fatalf("termination = %+v, want write timeout", termination)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("response drain remained blocked")
+	terminated := sink.next(t)
+	if got, want := terminated.Message, "connection_terminated"; got != want {
+		t.Fatalf("termination event = %q, want %q", got, want)
+	}
+	attributes := recordAttributes(terminated)
+	if got, want := attributes["phase"], "write"; got != want {
+		t.Fatalf("termination phase = %q, want %q", got, want)
+	}
+	if got, want := attributes["reason"], string(terminationTimeout); got != want {
+		t.Fatalf("termination reason = %q, want %q", got, want)
+	}
+
+	fastServer, fastClient := net.Pipe()
+	waitForAccept(t, listener, 2)
+	listener.connections <- fastServer
+	t.Cleanup(func() { _ = fastClient.Close() })
+	if err := fastClient.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, writeErr = io.WriteString(fastClient, "PING\r\n"); writeErr != nil {
+		t.Fatalf("write fast request: %v", writeErr)
+	}
+	response, readErr := bufio.NewReader(fastClient).ReadString('\n')
+	if readErr != nil {
+		t.Fatalf("read fast response: %v", readErr)
+	}
+	if want := "-ERR NOAUTH authentication required\r\n"; response != want {
+		t.Fatalf("fast response = %q, want %q", response, want)
 	}
 }
 
