@@ -68,9 +68,10 @@ are signed 64-bit integers. Block values are unsigned 64-bit integers and must
 fit the configured block width.
 
 `GET`, `SET`, `UNSET`, and `EXISTS` take world block coordinates. `CHUNK`,
-`CHUNKBIN`, `CHUNKEXISTS`, and `CHUNKSET` take regular-chunk coordinates.
-`CHUNK`, `CHUNKBIN`, and `CHUNKSET` also have the exact-state forms shown
-below. These coordinate spaces are distinct; the
+`CHUNKBIN`, `CHUNKEXISTS`, `CHUNKSET`, `CHUNKSCAN`, `CHUNKRANGE`, and
+`CHUNKRADIUS` take or return regular-chunk coordinates. `CHUNK`, `CHUNKBIN`,
+and `CHUNKSET` also have the exact-state forms shown below. These coordinate
+spaces are distinct; the
 [project terminology](TERMINOLOGY.md) defines their names.
 
 | Command | Response | Behavior |
@@ -91,7 +92,33 @@ below. These coordinate spaces are distinct; the
 | `CHUNKEXISTS x y` | `+OK 0` or `+OK 1` | Report whether the chunk exists independently of block presence. |
 | `CHUNKSET x y payload` | `+OK` | Persist a packed regular chunk from an exact-length hexadecimal payload. |
 | `CHUNKSET x y STATE payload\|presence` | `+OK` | Atomically persist an exact-length hexadecimal payload and presence bitmap. |
+| `CHUNKSCAN limit [cursor_x cursor_y]` | Array headed by `END` or `CURSOR x y` | Enumerate populated chunks in deterministic coordinate order. |
+| `CHUNKRANGE x0 y0 x1 y1` | Array of exact chunk states | Read populated chunks in an inclusive rectangular range. |
+| `CHUNKRADIUS x y radius` | Array of exact chunk states | Read populated chunks in an inclusive Euclidean radius. |
 | `QUIT` | `+OK` | Close the session after the response. |
+
+`CHUNKSCAN` accepts a limit from 1 through 256 and orders coordinates by
+ascending `x`, then ascending `y`. Its first response item is `CURSOR x y`
+when another populated chunk exists after the page, or `END` otherwise. Each
+remaining item is `x y`. A client continues with the returned coordinates as
+the exclusive cursor. Persisted chunks with an empty presence bitmap are not
+listed. Candidate accumulation is duplicate-free and bounded to at most one
+coordinate beyond the requested page, so stale unrelated files or duplicate
+artifacts cannot make scan memory grow with the world.
+
+`CHUNKRANGE` takes inclusive corners satisfying `x0 <= x1` and `y0 <= y1`.
+The rectangle may cover at most 256 coordinates. `CHUNKRADIUS` takes a
+non-negative chunk radius and includes coordinates satisfying
+`dx*dx + dy*dy <= radius*radius`; the resulting disc may likewise cover at
+most 256 coordinates. Both commands return populated chunks in ascending
+`x`, then `y`, and omit missing chunks and chunks with an empty presence
+bitmap. Each array item is `x y payload|presence`, using the same lowercase
+hexadecimal exact-state representation as `CHUNK x y STATE`.
+
+Range and radius arithmetic is checked across the complete signed 64-bit
+coordinate domain. Their complete encoded response, including array and bulk
+framing, is capped at 64 MiB. A populated result that would cross the cap
+returns `OUT_OF_RANGE` instead of allocating or returning a partial array.
 
 The `INFO` payload contains newline-terminated `key=value` records in this
 fixed order: `regiondb_version`, `process_lock_mode`, `chunk_lock_mode`,

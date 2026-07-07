@@ -59,7 +59,8 @@ func testIntegrationTCPCommandLifecycle(t *testing.T) {
 		"MSET 10 10 3 11 10 4\r\nMGET 10 10 11 10 12 10\r\n" +
 		"CHUNK -1 1 STATE\r\nCHUNKBIN -1 1 STATE\r\nCHUNKSET 2 2 STATE 9100|01\r\nCHUNK 2 2 STATE\r\n" +
 		"CHUNKEXISTS -1 1\r\nCHUNKEXISTS 99 99\r\nSET -1 2 0\r\nEXISTS -1 2\r\n" +
-		"UNSET -1 2\r\nGET -1 2\r\nEXISTS -1 2\r\nCHUNKEXISTS -1 1\r\nQUIT\r\n"
+		"UNSET -1 2\r\nGET -1 2\r\nEXISTS -1 2\r\nCHUNKEXISTS -1 1\r\n" +
+		"CHUNKSCAN 1\r\nCHUNKSCAN 1 2 2\r\nCHUNKRANGE 2 2 5 5\r\nCHUNKRADIUS 2 2 0\r\nQUIT\r\n"
 	writeResult := make(chan error, 1)
 	go func() {
 		writeResult <- writeIntegrationRequest(connection, request)
@@ -126,6 +127,24 @@ func testIntegrationTCPCommandLifecycle(t *testing.T) {
 		"0\r\n",
 		"+OK 0\r\n",
 		"+OK 1\r\n",
+		"*2\r\n",
+		"$10\r\n",
+		"CURSOR 2 2\r\n",
+		"$3\r\n",
+		"2 2\r\n",
+		"*2\r\n",
+		"$3\r\n",
+		"END\r\n",
+		"$3\r\n",
+		"5 5\r\n",
+		"*2\r\n",
+		"$11\r\n",
+		"2 2 0100|01\r\n",
+		"$11\r\n",
+		"5 5 4300|03\r\n",
+		"*1\r\n",
+		"$11\r\n",
+		"2 2 0100|01\r\n",
 		"+OK\r\n",
 	)
 	for _, want := range wantResponses {

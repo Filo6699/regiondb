@@ -17,6 +17,7 @@ import (
 
 type ChunkStore interface {
 	ReadChunk(geometry.Coord) (*storage.Chunk, error)
+	ScanChunkCoords(bool, geometry.Coord, int) ([]geometry.Coord, bool, error)
 	WriteChunk(geometry.Coord, *storage.Chunk) error
 	RuntimeStats() storage.RuntimeStats
 }
@@ -152,6 +153,12 @@ func (s *Session) Execute(command Command) Response {
 		return s.chunkExists(command.Args)
 	case "CHUNKSET":
 		return s.chunkSet(command.Args)
+	case "CHUNKSCAN":
+		return s.chunkScan(command.Args)
+	case "CHUNKRANGE":
+		return s.chunkRange(command.Args)
+	case "CHUNKRADIUS":
+		return s.chunkRadius(command.Args)
 	default:
 		return errorResponse("COMMAND", "unknown command")
 	}

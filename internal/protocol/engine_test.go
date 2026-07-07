@@ -2,7 +2,9 @@ package protocol
 
 import (
 	"errors"
+	"math"
 	"os"
+	"sort"
 	"testing"
 
 	"github.com/Filo6699/regiondb/internal/geometry"
@@ -280,6 +282,155 @@ func TestSessionChunkStateWriteIsAtomic(t *testing.T) {
 	assertResponse(t, session, "CHUNK 1 2 STATE\r\n", "$7\r\n4100|05\r\n")
 }
 
+func TestSessionWorldReadCommands(t *testing.T) {
+	t.Parallel()
+
+	g := testGeometry(t)
+	store := &memoryStore{chunks: make(map[geometry.Coord]*storage.Chunk)}
+	putTestChunk(t, store, g, geometry.Coord{X: -2, Y: 1}, geometry.Offset{}, 5)
+	putTestChunk(t, store, g, geometry.Coord{X: 0, Y: -1}, geometry.Offset{}, 0)
+	store.chunks[geometry.Coord{X: 1, Y: 0}] = mustProtocolChunk(t, g)
+	putTestChunk(t, store, g, geometry.Coord{X: 2, Y: 2}, geometry.Offset{X: 1, Y: 1}, 7)
+	putTestChunk(
+		t,
+		store,
+		g,
+		geometry.Coord{X: math.MaxInt64, Y: math.MaxInt64},
+		geometry.Offset{},
+		3,
+	)
+
+	engine, err := NewEngine(g, store, "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := engine.NewSession()
+	assertResponse(t, session, "AUTH test-token\r\n", "+OK\r\n")
+
+	assertResponse(
+		t,
+		session,
+		"CHUNKSCAN 1\r\n",
+		"*2\r\n$11\r\nCURSOR -2 1\r\n$4\r\n-2 1\r\n",
+	)
+	assertResponse(
+		t,
+		session,
+		"CHUNKSCAN 1 -2 1\r\n",
+		"*2\r\n$11\r\nCURSOR 0 -1\r\n$4\r\n0 -1\r\n",
+	)
+	assertResponse(
+		t,
+		session,
+		"CHUNKSCAN 1 0 -1\r\n",
+		"*2\r\n$10\r\nCURSOR 2 2\r\n$3\r\n2 2\r\n",
+	)
+	assertResponse(
+		t,
+		session,
+		"CHUNKRANGE -2 -1 1 1\r\n",
+		"*2\r\n$12\r\n-2 1 0500|01\r\n$12\r\n0 -1 0000|01\r\n",
+	)
+	assertResponse(
+		t,
+		session,
+		"CHUNKRADIUS 0 0 1\r\n",
+		"*1\r\n$12\r\n0 -1 0000|01\r\n",
+	)
+	assertResponse(
+		t,
+		session,
+		"CHUNKRADIUS 9223372036854775807 9223372036854775807 1\r\n",
+		"*1\r\n$47\r\n9223372036854775807 9223372036854775807 0300|01\r\n",
+	)
+	assertResponse(
+		t,
+		session,
+		"CHUNKSCAN 1 9223372036854775807 9223372036854775807\r\n",
+		"*1\r\n$3\r\nEND\r\n",
+	)
+	assertResponse(
+		t,
+		session,
+		"CHUNKRANGE -9223372036854775808 -9223372036854775808 -9223372036854775808 -9223372036854775808\r\n",
+		"*0\r\n",
+	)
+}
+
+func TestSessionWorldReadValidationAndStorageErrors(t *testing.T) {
+	t.Parallel()
+
+	session := newTestSession(t)
+	assertResponse(t, session, "AUTH test-token\r\n", "+OK\r\n")
+	for _, test := range []struct {
+		frame string
+		want  string
+	}{
+		{
+			frame: "CHUNKSCAN 0\r\n",
+			want:  "-ERR INVALID_ARGUMENT limit must be between 1 and 256\r\n",
+		},
+		{
+			frame: "CHUNKSCAN 257\r\n",
+			want:  "-ERR INVALID_ARGUMENT limit must be between 1 and 256\r\n",
+		},
+		{
+			frame: "CHUNKSCAN nope\r\n",
+			want:  "-ERR NUMBER limit must be an unsigned decimal integer\r\n",
+		},
+		{
+			frame: "CHUNKRANGE 1 0 0 1\r\n",
+			want:  "-ERR INVALID_ARGUMENT chunk range corners must satisfy x0<=x1 and y0<=y1\r\n",
+		},
+		{
+			frame: "CHUNKRANGE -9223372036854775808 0 9223372036854775807 0\r\n",
+			want:  "-ERR INVALID_ARGUMENT chunk range must cover at most 256 chunks\r\n",
+		},
+		{
+			frame: "CHUNKRANGE 0 0 255 1\r\n",
+			want:  "-ERR INVALID_ARGUMENT chunk range must cover at most 256 chunks\r\n",
+		},
+		{
+			frame: "CHUNKRADIUS 0 0 -1\r\n",
+			want:  "-ERR INVALID_ARGUMENT chunk radius must be non-negative and cover at most 256 chunks\r\n",
+		},
+		{
+			frame: "CHUNKRADIUS 0 0 10\r\n",
+			want:  "-ERR INVALID_ARGUMENT chunk radius must cover at most 256 chunks\r\n",
+		},
+	} {
+		assertResponse(t, session, test.frame, test.want)
+	}
+
+	g := testGeometry(t)
+	store := &memoryStore{
+		chunks:  make(map[geometry.Coord]*storage.Chunk),
+		scanErr: errors.New("private scan failure"),
+	}
+	engine, err := NewEngine(g, store, "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failing := engine.NewSession()
+	assertResponse(t, failing, "AUTH test-token\r\n", "+OK\r\n")
+	assertResponse(t, failing, "CHUNKSCAN 1\r\n", "-ERR STORAGE scan failed\r\n")
+}
+
+func TestWorldReadResponseCapIncludesFraming(t *testing.T) {
+	t.Parallel()
+
+	itemWireBytes, ok := worldChunkWireSize(geometry.Coord{}, maxWorldReadResponseSize/2, 0)
+	if !ok {
+		t.Fatal("worldChunkWireSize() rejected an overflow-safe input")
+	}
+	if total := arrayHeaderSize(1) + itemWireBytes; total <= maxWorldReadResponseSize {
+		t.Fatalf("framed response size = %d, want over cap", total)
+	}
+	if _, ok := worldChunkWireSize(geometry.Coord{}, maxWorldReadResponseSize, 0); ok {
+		t.Fatal("worldChunkWireSize() accepted an oversized payload")
+	}
+}
+
 func TestSessionRejectsInvalidCommands(t *testing.T) {
 	t.Parallel()
 
@@ -447,6 +598,10 @@ func TestSessionEnforcesCommandArity(t *testing.T) {
 		"CHUNKBIN 1\r\n",
 		"CHUNKEXISTS 1\r\n",
 		"CHUNKSET 1 2\r\n",
+		"CHUNKSCAN\r\n",
+		"CHUNKSCAN 1 2\r\n",
+		"CHUNKRANGE 1 2 3\r\n",
+		"CHUNKRADIUS 1 2\r\n",
 		"QUIT extra\r\n",
 	}
 	for _, frame := range frames {
@@ -606,6 +761,7 @@ func assertResponse(t *testing.T, session *Session, frame, want string) {
 type memoryStore struct {
 	chunks       map[geometry.Coord]*storage.Chunk
 	readErr      error
+	scanErr      error
 	writeErr     error
 	writeErrorAt int
 	stats        storage.RuntimeStats
@@ -627,6 +783,29 @@ func (s *memoryStore) ReadChunk(coord geometry.Coord) (*storage.Chunk, error) {
 	return storage.ChunkFromState(chunk.Geometry(), chunk.Bytes(), chunk.PresenceBytes())
 }
 
+func (s *memoryStore) ScanChunkCoords(
+	hasCursor bool,
+	cursor geometry.Coord,
+	limit int,
+) ([]geometry.Coord, bool, error) {
+	if s.scanErr != nil {
+		return nil, false, s.scanErr
+	}
+	coords := make([]geometry.Coord, 0, len(s.chunks))
+	for coord := range s.chunks {
+		if !hasCursor || chunkCoordBefore(cursor, coord) {
+			coords = append(coords, coord)
+		}
+	}
+	sort.Slice(coords, func(left, right int) bool {
+		return chunkCoordBefore(coords[left], coords[right])
+	})
+	if len(coords) <= limit {
+		return coords, false, nil
+	}
+	return coords[:limit], true, nil
+}
+
 func (s *memoryStore) WriteChunk(coord geometry.Coord, chunk *storage.Chunk) error {
 	if s.writeErr != nil && (s.writeErrorAt == 0 || s.writeCount+1 == s.writeErrorAt) {
 		return s.writeErr
@@ -638,4 +817,33 @@ func (s *memoryStore) WriteChunk(coord geometry.Coord, chunk *storage.Chunk) err
 	s.chunks[coord] = cloned
 	s.writeCount++
 	return nil
+}
+
+func chunkCoordBefore(left, right geometry.Coord) bool {
+	return left.X < right.X || left.X == right.X && left.Y < right.Y
+}
+
+func putTestChunk(
+	t *testing.T,
+	store *memoryStore,
+	g geometry.Geometry,
+	coord geometry.Coord,
+	offset geometry.Offset,
+	value uint64,
+) {
+	t.Helper()
+	chunk := mustProtocolChunk(t, g)
+	if err := chunk.Set(offset, value); err != nil {
+		t.Fatal(err)
+	}
+	store.chunks[coord] = chunk
+}
+
+func mustProtocolChunk(t *testing.T, g geometry.Geometry) *storage.Chunk {
+	t.Helper()
+	chunk, err := storage.NewChunk(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return chunk
 }
