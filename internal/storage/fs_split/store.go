@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -46,6 +47,7 @@ type Store struct {
 	walBytes             int64
 	walUnsyncedUpdates   uint64
 	walRecordBuffer      []byte
+	versionClock         uint64
 	walForegroundFlushes atomic.Uint64
 	walGroupFlushes      atomic.Uint64
 	walCheckpointFlushes atomic.Uint64
@@ -192,6 +194,12 @@ func openStore(
 		startupScanCapped: scan.capped,
 	}
 	wal = nil
+	if err := store.loadVersionClock(); err != nil {
+		if closeErr := store.walHandles.close(); closeErr != nil {
+			return nil, errors.Join(err, closeErr)
+		}
+		return nil, fmt.Errorf("open version clock: %w", err)
+	}
 	if err := store.recoverWAL(); err != nil {
 		if closeErr := store.walHandles.close(); closeErr != nil {
 			return nil, errors.Join(err, closeErr)
@@ -274,7 +282,21 @@ func (s *Store) WriteChunk(coord geometry.Coord, chunk *storage.Chunk) error {
 	if err := s.writerLock.checkHealthy(); err != nil {
 		return err
 	}
+	if s.versionClock == math.MaxUint64 {
+		return ErrVersionOverflow
+	}
+	version := s.versionClock + 1
+	if err := s.writeChunkLocked(coord, chunk, version); err != nil {
+		return err
+	}
+	if err := s.persistVersionClock(version); err != nil {
+		return fmt.Errorf("persist version clock: %w", err)
+	}
+	s.versionClock = version
+	return nil
+}
 
+func (s *Store) writeChunkLocked(coord geometry.Coord, chunk *storage.Chunk, version uint64) error {
 	payload := chunk.Bytes()
 	presence := chunk.PresenceBytes()
 	record := s.appendWALRecord(s.walRecordBuffer[:0], coord, payload, presence)
@@ -285,6 +307,9 @@ func (s *Store) WriteChunk(coord geometry.Coord, chunk *storage.Chunk) error {
 	syncCheckpoint := s.options.Durability == DurabilityFsyncCheckpoint
 	if err := s.persistChunk(coord, payload, presence, syncCheckpoint); err != nil {
 		return fmt.Errorf("persist chunk: %w", err)
+	}
+	if err := s.persistChunkVersion(coord, version, syncCheckpoint); err != nil {
+		return fmt.Errorf("persist chunk version: %w", err)
 	}
 	s.walRecords++
 	s.walBytes += int64(len(record))

@@ -20,9 +20,39 @@ import (
 
 func TestIntegrationTCP(t *testing.T) {
 	t.Run("command lifecycle", testIntegrationTCPCommandLifecycle)
+	t.Run("conditional chunks", testIntegrationTCPConditionalChunks)
 	t.Run("concurrent clients", testIntegrationTCPConcurrentClients)
 	t.Run("overload response", testIntegrationTCPOverloadResponse)
 	t.Run("request deadline", testIntegrationTCPRequestDeadline)
+}
+
+func testIntegrationTCPConditionalChunks(t *testing.T) {
+	address := startIntegrationServer(t, DefaultOptions())
+	connection := dialIntegrationServer(t, address)
+	defer func() { _ = connection.Close() }()
+
+	request := "AUTH secret\r\n" +
+		"CHUNKVER 1 1\r\n" +
+		"CHUNKCAS 1 1 0 1000\r\n" +
+		"CHUNKBATCH 1 1 1 2000 2 2 0 3000\r\n" +
+		"CHUNKBATCH 1 1 2 4000 2 2 0 5000\r\n" +
+		"CHUNKVER 1 1\r\nCHUNKVER 2 2\r\nCHUNK 1 1\r\nQUIT\r\n"
+	if err := writeIntegrationRequest(connection, request); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	want := "+OK\r\n" +
+		"+OK 0\r\n" +
+		"+OK 1\r\n" +
+		"*2\r\n$1\r\n2\r\n$1\r\n3\r\n" +
+		"-ERR VERSION_MISMATCH chunk version changed\r\n" +
+		"+OK 2\r\n+OK 3\r\n$4\r\n2000\r\n+OK\r\n"
+	response := make([]byte, len(want))
+	if _, err := io.ReadFull(connection, response); err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if got := string(response); got != want {
+		t.Fatalf("response = %q, want %q", got, want)
+	}
 }
 
 func testIntegrationTCPRequestDeadline(t *testing.T) {

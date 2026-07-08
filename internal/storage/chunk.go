@@ -12,6 +12,7 @@ var (
 	ErrBlockOutOfRange = errors.New("block offset out of range")
 	ErrPayloadSize     = errors.New("invalid packed payload size")
 	ErrPresenceSize    = errors.New("invalid presence bitmap size")
+	ErrVersionMismatch = errors.New("chunk version mismatch")
 )
 
 type Chunk struct {
@@ -19,6 +20,12 @@ type Chunk struct {
 	codec    bitcodec.Codec
 	payload  []byte
 	presence []byte
+}
+
+type ConditionalMutation struct {
+	Coord           geometry.Coord
+	ExpectedVersion uint64
+	Chunk           *Chunk
 }
 
 func NewChunk(g geometry.Geometry) (*Chunk, error) {

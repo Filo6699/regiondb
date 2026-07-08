@@ -22,6 +22,12 @@ type ChunkStore interface {
 	RuntimeStats() storage.RuntimeStats
 }
 
+type VersionedChunkStore interface {
+	ChunkVersion(geometry.Coord) (uint64, error)
+	CompareAndSwapChunk(geometry.Coord, uint64, *storage.Chunk) (uint64, error)
+	ConditionalWriteChunks([]storage.ConditionalMutation) ([]uint64, error)
+}
+
 type Engine struct {
 	geometry geometry.Geometry
 	store    ChunkStore
@@ -153,6 +159,12 @@ func (s *Session) Execute(command Command) Response {
 		return s.chunkExists(command.Args)
 	case "CHUNKSET":
 		return s.chunkSet(command.Args)
+	case "CHUNKVER":
+		return s.chunkVersion(command.Args)
+	case "CHUNKCAS":
+		return s.chunkCAS(command.Args)
+	case "CHUNKBATCH":
+		return s.chunkBatch(command.Args)
 	case "CHUNKSCAN":
 		return s.chunkScan(command.Args)
 	case "CHUNKRANGE":
@@ -162,6 +174,145 @@ func (s *Session) Execute(command Command) Response {
 	default:
 		return errorResponse("COMMAND", "unknown command")
 	}
+}
+
+func (s *Session) chunkVersion(args []string) Response {
+	if response := requireArity(args, 2); response != nil {
+		return *response
+	}
+	coord, response := parseCoord(args)
+	if response != nil {
+		return *response
+	}
+	s.engine.mu.RLock()
+	defer s.engine.mu.RUnlock()
+	store, ok := s.engine.store.(VersionedChunkStore)
+	if !ok {
+		return errorResponse("STORAGE", "version operations unavailable")
+	}
+	version, err := store.ChunkVersion(coord)
+	if err != nil {
+		return errorResponse("STORAGE", "read version failed")
+	}
+	return okResponse(strconv.FormatUint(version, 10))
+}
+
+func (s *Session) chunkCAS(args []string) Response {
+	if len(args) != 4 {
+		return errorResponse("ARITY", "wrong number of arguments")
+	}
+	mutation, response := s.parseConditionalChunk(args)
+	if response != nil {
+		return *response
+	}
+	s.engine.mu.Lock()
+	defer s.engine.mu.Unlock()
+	store, ok := s.engine.store.(VersionedChunkStore)
+	if !ok {
+		return errorResponse("STORAGE", "version operations unavailable")
+	}
+	version, err := store.CompareAndSwapChunk(
+		mutation.Coord,
+		mutation.ExpectedVersion,
+		mutation.Chunk,
+	)
+	if errors.Is(err, storage.ErrVersionMismatch) {
+		return errorResponse("VERSION_MISMATCH", "chunk version changed")
+	}
+	if err != nil {
+		return errorResponse("STORAGE", "conditional write failed")
+	}
+	return okResponse(strconv.FormatUint(version, 10))
+}
+
+func (s *Session) chunkBatch(args []string) Response {
+	if len(args) == 0 || len(args)%4 != 0 {
+		return errorResponse("ARITY", "wrong number of arguments")
+	}
+	mutations := make([]storage.ConditionalMutation, 0, len(args)/4)
+	for index := 0; index < len(args); index += 4 {
+		mutation, response := s.parseConditionalChunk(args[index : index+4])
+		if response != nil {
+			return *response
+		}
+		mutations = append(mutations, mutation)
+	}
+	s.engine.mu.Lock()
+	defer s.engine.mu.Unlock()
+	store, ok := s.engine.store.(VersionedChunkStore)
+	if !ok {
+		return errorResponse("STORAGE", "version operations unavailable")
+	}
+	versions, err := store.ConditionalWriteChunks(mutations)
+	if errors.Is(err, storage.ErrVersionMismatch) {
+		return errorResponse("VERSION_MISMATCH", "chunk version changed")
+	}
+	if err != nil {
+		return errorResponse("STORAGE", "conditional batch failed")
+	}
+	items := make([][]byte, len(versions))
+	for index, version := range versions {
+		items[index] = strconv.AppendUint(nil, version, 10)
+	}
+	return arrayResponse(items)
+}
+
+func (s *Session) parseConditionalChunk(args []string) (storage.ConditionalMutation, *Response) {
+	coord, response := parseCoord(args[:2])
+	if response != nil {
+		return storage.ConditionalMutation{}, response
+	}
+	expected, err := parseUint(args[2])
+	if err != nil {
+		result := errorResponse("NUMBER", "version must be an unsigned decimal integer")
+		return storage.ConditionalMutation{}, &result
+	}
+	chunk, response := s.parseChunkStateText(args[3])
+	if response != nil {
+		return storage.ConditionalMutation{}, response
+	}
+	return storage.ConditionalMutation{Coord: coord, ExpectedVersion: expected, Chunk: chunk}, nil
+}
+
+func (s *Session) parseChunkStateText(value string) (*storage.Chunk, *Response) {
+	payloadText, presenceText, state := strings.Cut(value, "|")
+	payloadBytes := s.engine.geometry.PayloadBytes()
+	if payloadBytes > int(^uint(0)>>1)/2 || len(payloadText) != hex.EncodedLen(payloadBytes) {
+		result := errorResponse("PAYLOAD", "packed chunk has an invalid length")
+		return nil, &result
+	}
+	payload := make([]byte, payloadBytes)
+	if _, err := hex.Decode(payload, []byte(payloadText)); err != nil {
+		result := errorResponse("PAYLOAD", "packed chunk must be hexadecimal")
+		return nil, &result
+	}
+	if !state {
+		chunk, err := storage.ChunkFromBytes(s.engine.geometry, payload)
+		if err != nil {
+			result := errorResponse("PAYLOAD", "packed chunk is invalid")
+			return nil, &result
+		}
+		return chunk, nil
+	}
+	if strings.Contains(presenceText, "|") ||
+		len(presenceText) != hex.EncodedLen(s.engine.geometry.PresenceBytes()) {
+		result := errorResponse("PAYLOAD", "packed chunk state has an invalid length")
+		return nil, &result
+	}
+	presence := make([]byte, s.engine.geometry.PresenceBytes())
+	if _, err := hex.Decode(presence, []byte(presenceText)); err != nil {
+		result := errorResponse("PAYLOAD", "chunk presence bitmap must be hexadecimal")
+		return nil, &result
+	}
+	chunk, err := storage.ChunkFromState(s.engine.geometry, payload, presence)
+	if err != nil {
+		result := errorResponse("PAYLOAD", "packed chunk state is invalid")
+		return nil, &result
+	}
+	if response := s.canonicalizeChunkState(chunk); response != nil {
+		return nil, response
+	}
+	return chunk, nil
 }
 
 func infoPayload(stats storage.RuntimeStats) []byte {
@@ -504,6 +655,18 @@ func (s *Session) writeChunkState(args []string) Response {
 	if err != nil {
 		return errorResponse("PAYLOAD", "packed chunk state is invalid")
 	}
+	if response := s.canonicalizeChunkState(chunk); response != nil {
+		return *response
+	}
+	s.engine.mu.Lock()
+	defer s.engine.mu.Unlock()
+	if err := s.engine.store.WriteChunk(coord, chunk); err != nil {
+		return errorResponse("STORAGE", "write failed")
+	}
+	return okResponse("")
+}
+
+func (s *Session) canonicalizeChunkState(chunk *storage.Chunk) *Response {
 	edge := uint64(s.engine.geometry.Config().ChunkEdge)
 	for index := range s.engine.geometry.BlockCount() {
 		offset := geometry.Offset{
@@ -512,20 +675,17 @@ func (s *Session) writeChunkState(args []string) Response {
 		}
 		exists, err := chunk.Exists(offset)
 		if err != nil {
-			return errorResponse("PAYLOAD", "packed chunk state is invalid")
+			response := errorResponse("PAYLOAD", "packed chunk state is invalid")
+			return &response
 		}
 		if !exists {
 			if err := chunk.Unset(offset); err != nil {
-				return errorResponse("PAYLOAD", "packed chunk state is invalid")
+				response := errorResponse("PAYLOAD", "packed chunk state is invalid")
+				return &response
 			}
 		}
 	}
-	s.engine.mu.Lock()
-	defer s.engine.mu.Unlock()
-	if err := s.engine.store.WriteChunk(coord, chunk); err != nil {
-		return errorResponse("STORAGE", "write failed")
-	}
-	return okResponse("")
+	return nil
 }
 
 func parseChunkReadMode(args []string) (bool, *Response) {
