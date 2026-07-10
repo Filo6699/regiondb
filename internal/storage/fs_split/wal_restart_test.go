@@ -112,7 +112,7 @@ func TestCrashSyncedWALSurvivesRestart(t *testing.T) {
 	assertNoChunkTemporaryFiles(t, root)
 }
 
-func TestWALSyncFailurePropagatesAndRecoversAfterReopen(t *testing.T) {
+func TestWALSyncFailureRejectsWriteWithoutRecoveryReplay(t *testing.T) {
 	t.Parallel()
 
 	root := testTempDir(t)
@@ -138,16 +138,8 @@ func TestWALSyncFailurePropagatesAndRecoversAfterReopen(t *testing.T) {
 	closeStore(t, store)
 
 	reopened := mustOpenWithOptions(t, root, g, options)
-	recovered, err := reopened.ReadChunk(walRestartCrashCoord)
-	if err != nil {
-		t.Fatalf("ReadChunk() after WAL failure restart: %v", err)
-	}
-	value, err := recovered.Get(geometry.Offset{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if value != 73 {
-		t.Fatalf("recovered value = %d, want 73", value)
+	if _, err := reopened.ReadChunk(walRestartCrashCoord); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ReadChunk() after rejected write = %v, want os.ErrNotExist", err)
 	}
 	closeStore(t, reopened)
 }

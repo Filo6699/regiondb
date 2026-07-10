@@ -3,6 +3,7 @@ package fs_split
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/Filo6699/regiondb/internal/defaults"
 )
@@ -32,6 +33,7 @@ type Options struct {
 	MaxOpenWALHandles     int
 	DescriptorReserve     int
 	WALGroupCommitUpdates uint64
+	PostCommitFailure     func(event string)
 }
 
 func (options Options) validated() (Options, error) {
@@ -71,6 +73,11 @@ func (options Options) validated() (Options, error) {
 	options.MaxOpenWALHandles = effectiveWALHandles
 	if options.WALGroupCommitUpdates == 0 {
 		options.WALGroupCommitUpdates = DefaultWALGroupCommitUpdates
+	}
+	if options.PostCommitFailure == nil {
+		options.PostCommitFailure = func(event string) {
+			slog.Warn(event, slog.String("component", "storage"))
+		}
 	}
 	return options, nil
 }

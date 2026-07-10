@@ -50,6 +50,7 @@ func TestWriteDurabilityBoundaryOrdering(t *testing.T) {
 			durability: DurabilityFsyncCheckpoint,
 			want: []string{
 				"wal:" + string(walRecordAppended),
+				"wal:" + string(walRecordSynced),
 				"chunk:" + string(atomicWriteTemporaryCreated),
 				"chunk:" + string(atomicWriteDataWritten),
 				"chunk:" + string(atomicWriteDataSynced),
@@ -112,12 +113,12 @@ func TestCheckpointSyncCompletesBeforeWriteReturns(t *testing.T) {
 		t.Fatalf("final durability boundaries = %q, want suffix %q", got, wantSuffix)
 	}
 	if stats := store.RuntimeStats(); stats.Checkpoints != 1 ||
-		stats.WALFlushes != 1 ||
-		stats.WALForegroundFlushes != 0 ||
+		stats.WALFlushes != 2 ||
+		stats.WALForegroundFlushes != 1 ||
 		stats.WALGroupFlushes != 0 ||
 		stats.WALEvictionFlushes != 0 ||
 		stats.WALCheckpointFlushes != 1 {
-		t.Fatalf("stats after checkpoint = %+v, want one completed checkpoint flush", stats)
+		t.Fatalf("stats after checkpoint = %+v, want commit and checkpoint flushes", stats)
 	}
 	closeStore(t, store)
 }
@@ -131,18 +132,21 @@ func TestDurabilityFailpointsPreventSuccessfulWrite(t *testing.T) {
 		checkpointRecords uint64
 		fail              walBoundary
 		wantChunk         bool
+		wantError         bool
 	}{
 		{
 			name:              "WAL append",
 			durability:        DurabilityFsyncWAL,
 			checkpointRecords: 8,
 			fail:              walRecordAppended,
+			wantError:         true,
 		},
 		{
 			name:              "WAL sync",
 			durability:        DurabilityFsyncWAL,
 			checkpointRecords: 8,
 			fail:              walRecordSynced,
+			wantError:         true,
 		},
 		{
 			name:              "checkpoint truncate",
@@ -174,8 +178,11 @@ func TestDurabilityFailpointsPreventSuccessfulWrite(t *testing.T) {
 			}
 
 			err := store.WriteChunk(geometry.Coord{}, chunk)
-			if !errors.Is(err, injected) {
+			if test.wantError && !errors.Is(err, injected) {
 				t.Fatalf("WriteChunk() error = %v, want injected failure", err)
+			}
+			if !test.wantError && err != nil {
+				t.Fatalf("WriteChunk() post-commit error = %v, want nil", err)
 			}
 			_, statErr := os.Stat(store.chunkPath(geometry.Coord{}))
 			if test.wantChunk && statErr != nil {

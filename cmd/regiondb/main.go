@@ -118,6 +118,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnEr
 		MaxOpenWALHandles:     config.maxOpenWALStreams,
 		DescriptorReserve:     descriptorReserve,
 		WALGroupCommitUpdates: config.walGroupCommitUpdates,
+		PostCommitFailure: func(event string) {
+			logger.Warn("storage", event)
+		},
 	})
 	if err != nil {
 		logger.Error("storage", "open_failed")

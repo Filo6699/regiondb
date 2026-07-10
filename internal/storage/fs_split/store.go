@@ -48,6 +48,8 @@ type Store struct {
 	walUnsyncedUpdates   uint64
 	walRecordBuffer      []byte
 	versionClock         uint64
+	pendingPublications  map[geometry.Coord]pendingPublication
+	durabilityPoisoned   error
 	walForegroundFlushes atomic.Uint64
 	walGroupFlushes      atomic.Uint64
 	walCheckpointFlushes atomic.Uint64
@@ -56,7 +58,15 @@ type Store struct {
 	closed               bool
 	atomicWriteFailpoint func(atomicWriteBoundary) error
 	walFailpoint         func(walBoundary) error
+	intentFailpoint      func(intentBoundary) error
+	walRollbackFailpoint func() error
 	mu                   sync.RWMutex
+}
+
+type pendingPublication struct {
+	payload  []byte
+	presence []byte
+	version  uint64
 }
 
 type atomicWriteBoundary string
@@ -189,9 +199,10 @@ func openStore(
 			options.MaxOpenWALHandles,
 			wal,
 		),
-		writerLock:        lock,
-		cache:             newChunkCache(g, options.MaxLoadedChunks),
-		startupScanCapped: scan.capped,
+		writerLock:          lock,
+		cache:               newChunkCache(g, options.MaxLoadedChunks),
+		pendingPublications: make(map[geometry.Coord]pendingPublication),
+		startupScanCapped:   scan.capped,
 	}
 	wal = nil
 	if err := store.loadVersionClock(); err != nil {
@@ -199,6 +210,12 @@ func openStore(
 			return nil, errors.Join(err, closeErr)
 		}
 		return nil, fmt.Errorf("open version clock: %w", err)
+	}
+	if err := store.recoverConditionalIntent(); err != nil {
+		if closeErr := store.walHandles.close(); closeErr != nil {
+			return nil, errors.Join(err, closeErr)
+		}
+		return nil, fmt.Errorf("recover conditional intent: %w", err)
 	}
 	if err := store.recoverWAL(); err != nil {
 		if closeErr := store.walHandles.close(); closeErr != nil {
@@ -282,46 +299,139 @@ func (s *Store) WriteChunk(coord geometry.Coord, chunk *storage.Chunk) error {
 	if err := s.writerLock.checkHealthy(); err != nil {
 		return err
 	}
+	if err := s.checkDurabilityHealthy(); err != nil {
+		return err
+	}
+	s.retryPendingPublications()
 	if s.versionClock == math.MaxUint64 {
 		return ErrVersionOverflow
 	}
 	version := s.versionClock + 1
-	if err := s.writeChunkLocked(coord, chunk, version); err != nil {
-		return err
-	}
 	if err := s.persistVersionClock(version); err != nil {
 		return fmt.Errorf("persist version clock: %w", err)
 	}
 	s.versionClock = version
+	if err := s.commitOrdinaryChunk(coord, chunk, version); err != nil {
+		return err
+	}
 	return nil
 }
 
-func (s *Store) writeChunkLocked(coord geometry.Coord, chunk *storage.Chunk, version uint64) error {
+func (s *Store) commitOrdinaryChunk(coord geometry.Coord, chunk *storage.Chunk, version uint64) error {
 	payload := chunk.Bytes()
 	presence := chunk.PresenceBytes()
 	record := s.appendWALRecord(s.walRecordBuffer[:0], coord, payload, presence)
-	if err := s.appendWAL(record); err != nil {
+	boundary, err := s.walSize()
+	if err != nil {
 		return err
 	}
+	if err := s.publishIntent(intentRollback, boundary); err != nil {
+		if _, statErr := os.Stat(s.intentPath()); statErr == nil {
+			if clearErr := s.clearIntent(); clearErr != nil {
+				s.poisonDurability(fmt.Errorf("clean failed rollback intent publication: %w", clearErr))
+				return errors.Join(err, s.checkDurabilityHealthy())
+			}
+		}
+		return err
+	}
+	unsyncedBefore := s.walUnsyncedUpdates
+	if err := s.appendWAL(record); err != nil {
+		return s.rollbackRejectedWrite(boundary, unsyncedBefore, err)
+	}
+	if err := s.ensureWALCommit(false); err != nil {
+		return s.rollbackRejectedWrite(boundary, unsyncedBefore, err)
+	}
+	commitErr := s.publishIntent(intentCommitted, boundary)
+	if commitErr != nil {
+		state, _, inspectErr := s.readIntent()
+		if inspectErr != nil {
+			s.poisonDurability(fmt.Errorf("inspect commit decision: %w", inspectErr))
+			return errors.Join(commitErr, s.checkDurabilityHealthy())
+		}
+		if state != intentCommitted {
+			return s.rollbackRejectedWrite(
+				boundary,
+				unsyncedBefore,
+				commitErr,
+			)
+		}
+		s.reportPostCommitFailure("committed_intent_sync_failed")
+	}
 	s.walRecordBuffer = record[:0]
-	syncCheckpoint := s.options.Durability == DurabilityFsyncCheckpoint
-	if err := s.persistChunk(coord, payload, presence, syncCheckpoint); err != nil {
-		return fmt.Errorf("persist chunk: %w", err)
-	}
-	if err := s.persistChunkVersion(coord, version, syncCheckpoint); err != nil {
-		return fmt.Errorf("persist chunk version: %w", err)
-	}
 	s.walRecords++
 	s.walBytes += int64(len(record))
-	if s.checkpointDue() {
-		if err := s.checkpointWAL(); err != nil {
-			return err
-		}
+	s.pendingPublications[coord] = pendingPublication{
+		payload: payload, presence: presence, version: version,
 	}
 	if err := s.cache.putState(coord, payload, presence); err != nil {
-		return fmt.Errorf("cache written chunk: %w", err)
+		s.poisonDurability(fmt.Errorf("cache committed chunk: %w", err))
+		s.reportPostCommitFailure("committed_write_publication_failed")
+	}
+	if err := s.clearIntent(); err != nil {
+		s.reportPostCommitFailure("committed_intent_cleanup_failed")
+		if syncErr := s.syncIntentDirectory(); syncErr != nil {
+			s.poisonDurability(fmt.Errorf("finish committed intent cleanup: %w", syncErr))
+		}
+	}
+	s.retryPendingPublications()
+	return nil
+}
+
+func (s *Store) retryPendingPublications() {
+	syncCheckpoint := s.options.Durability == DurabilityFsyncCheckpoint
+	for coord, pending := range s.pendingPublications {
+		if err := s.persistChunkVersion(coord, pending.version, syncCheckpoint); err != nil {
+			s.reportPostCommitFailure("committed_version_publication_failed")
+			return
+		}
+		if err := s.persistChunk(coord, pending.payload, pending.presence, syncCheckpoint); err != nil {
+			s.reportPostCommitFailure("committed_chunk_publication_failed")
+			return
+		}
+		delete(s.pendingPublications, coord)
+	}
+	if s.checkpointDue() {
+		if err := s.checkpointWAL(); err != nil {
+			s.reportPostCommitFailure("committed_checkpoint_failed")
+		}
+	}
+}
+
+func (s *Store) ensureWALCommit(forceGrouped bool) error {
+	switch s.options.Durability {
+	case DurabilityFsyncCheckpoint:
+		return s.syncWAL(walForegroundFlush)
+	case DurabilityFsyncWAL:
+		if forceGrouped && s.walUnsyncedUpdates != 0 {
+			return s.syncWAL(walForegroundFlush)
+		}
 	}
 	return nil
+}
+
+func (s *Store) reportPostCommitFailure(event string) {
+	if s.options.PostCommitFailure == nil {
+		return
+	}
+	// Observability is post-commit bookkeeping too. A broken callback must not
+	// turn an already committed write into a panic observed as failure.
+	defer func() {
+		_ = recover()
+	}()
+	s.options.PostCommitFailure(event)
+}
+
+func (s *Store) poisonDurability(err error) {
+	if s.durabilityPoisoned == nil {
+		s.durabilityPoisoned = err
+	}
+}
+
+func (s *Store) checkDurabilityHealthy() error {
+	if s.durabilityPoisoned == nil {
+		return nil
+	}
+	return fmt.Errorf("store is fail-closed after durability repair failure: %w", s.durabilityPoisoned)
 }
 
 func (s *Store) ReadChunk(coord geometry.Coord) (chunk *storage.Chunk, returnErr error) {
@@ -330,6 +440,13 @@ func (s *Store) ReadChunk(coord geometry.Coord) (chunk *storage.Chunk, returnErr
 
 	if s.closed {
 		return nil, errors.New("read chunk: store is closed")
+	}
+	if pending, found := s.pendingPublications[coord]; found {
+		chunk, err := storage.ChunkFromState(s.geometry, pending.payload, pending.presence)
+		if err != nil {
+			return nil, fmt.Errorf("read pending committed chunk: %w", err)
+		}
+		return chunk, nil
 	}
 	if !s.options.ReadOnly {
 		if chunk, found, err := s.cache.get(coord); found || err != nil {
