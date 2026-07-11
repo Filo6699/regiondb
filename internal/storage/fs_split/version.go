@@ -38,7 +38,15 @@ func (s *Store) ChunkVersion(coord geometry.Coord) (uint64, error) {
 	if pending, found := s.pendingPublications[coord]; found {
 		return pending.version, nil
 	}
-	return s.readChunkVersion(coord)
+	generation, err := s.beginReadOnlySnapshot()
+	if err != nil {
+		return 0, err
+	}
+	version, err := s.readChunkVersion(coord)
+	if validationErr := s.finishReadOnlySnapshot(generation); validationErr != nil {
+		return 0, validationErr
+	}
+	return version, err
 }
 
 func (s *Store) CompareAndSwapChunk(
@@ -74,53 +82,67 @@ func (s *Store) ConditionalWriteChunks(mutations []storage.ConditionalMutation) 
 	if err := s.checkDurabilityHealthy(); err != nil {
 		return nil, err
 	}
-	s.retryPendingPublications()
+	_ = s.retryPendingPublications()
+	if err := s.beginWriteSnapshot(); err != nil {
+		return nil, err
+	}
 
 	seen := make(map[geometry.Coord]struct{}, len(mutations))
 	for _, mutation := range mutations {
 		if mutation.Chunk == nil {
+			s.finishRejectedSnapshot()
 			return nil, errors.New("conditional write chunks: nil chunk")
 		}
 		if mutation.Chunk.Geometry() != s.geometry {
+			s.finishRejectedSnapshot()
 			return nil, ErrGeometryMismatch
 		}
 		if _, duplicate := seen[mutation.Coord]; duplicate {
+			s.finishRejectedSnapshot()
 			return nil, errors.New("conditional write chunks: duplicate coordinate")
 		}
 		seen[mutation.Coord] = struct{}{}
 		current, err := s.currentChunkVersion(mutation.Coord)
 		if err != nil {
+			s.finishRejectedSnapshot()
 			return nil, err
 		}
 		if current > s.versionClock {
+			s.finishRejectedSnapshot()
 			return nil, fmt.Errorf("%w: chunk version exceeds clock", ErrCorruptVersion)
 		}
 		if current != mutation.ExpectedVersion {
+			s.finishRejectedSnapshot()
 			return nil, ErrVersionMismatch
 		}
 	}
 	if uint64(len(mutations)) > math.MaxUint64-s.versionClock {
+		s.finishRejectedSnapshot()
 		return nil, ErrVersionOverflow
 	}
 
 	versions := make([]uint64, len(mutations))
 	finalVersion := s.versionClock + uint64(len(mutations))
 	if err := s.persistVersionClock(finalVersion); err != nil {
+		s.finishRejectedSnapshot()
 		return nil, fmt.Errorf("persist version clock: %w", err)
 	}
 	s.versionClock = finalVersion
 
 	boundary, err := s.walSize()
 	if err != nil {
+		s.finishRejectedSnapshot()
 		return nil, err
 	}
 	if err := s.publishIntent(intentRollback, boundary); err != nil {
 		if _, statErr := os.Stat(s.intentPath()); statErr == nil {
 			if clearErr := s.clearIntent(); clearErr != nil {
 				s.poisonDurability(fmt.Errorf("clean failed rollback intent publication: %w", clearErr))
+				s.finishRejectedSnapshot()
 				return nil, errors.Join(err, s.checkDurabilityHealthy())
 			}
 		}
+		s.finishRejectedSnapshot()
 		return nil, err
 	}
 
@@ -138,10 +160,14 @@ func (s *Store) ConditionalWriteChunks(mutations []storage.ConditionalMutation) 
 
 	unsyncedBefore := s.walUnsyncedUpdates
 	if err := s.appendWAL(records); err != nil {
-		return nil, s.rollbackRejectedWrite(boundary, unsyncedBefore, err)
+		result := s.rollbackRejectedWrite(boundary, unsyncedBefore, err)
+		s.finishRejectedSnapshot()
+		return nil, result
 	}
 	if err := s.ensureWALCommit(true); err != nil {
-		return nil, s.rollbackRejectedWrite(boundary, unsyncedBefore, err)
+		result := s.rollbackRejectedWrite(boundary, unsyncedBefore, err)
+		s.finishRejectedSnapshot()
+		return nil, result
 	}
 
 	commitErr := s.publishIntent(intentCommitted, boundary)
@@ -152,11 +178,13 @@ func (s *Store) ConditionalWriteChunks(mutations []storage.ConditionalMutation) 
 			return nil, errors.Join(commitErr, s.checkDurabilityHealthy())
 		}
 		if state != intentCommitted {
-			return nil, s.rollbackRejectedWrite(
+			result := s.rollbackRejectedWrite(
 				boundary,
 				unsyncedBefore,
 				commitErr,
 			)
+			s.finishRejectedSnapshot()
+			return nil, result
 		}
 		s.reportPostCommitFailure("committed_intent_sync_failed")
 	}
@@ -180,7 +208,8 @@ func (s *Store) ConditionalWriteChunks(mutations []storage.ConditionalMutation) 
 			s.poisonDurability(fmt.Errorf("finish committed intent cleanup: %w", syncErr))
 		}
 	}
-	s.retryPendingPublications()
+	_ = s.retryPendingPublications()
+	s.finishCommittedSnapshot()
 	return versions, nil
 }
 
@@ -241,7 +270,13 @@ func (s *Store) persistChunkVersion(coord geometry.Coord, version uint64, syncDa
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create chunk version directory: %w", err)
 	}
-	return writeAtomic(path, encoded, syncData, nil)
+	if err := writeAtomic(path, encoded, syncData, nil); err != nil {
+		return err
+	}
+	if !syncData {
+		s.pendingSync.add(path)
+	}
+	return nil
 }
 
 func (s *Store) loadVersionClock() error {

@@ -49,6 +49,8 @@ type Store struct {
 	walRecordBuffer      []byte
 	versionClock         uint64
 	pendingPublications  map[geometry.Coord]pendingPublication
+	pendingSync          durabilitySyncSet
+	snapshotGeneration   uint64
 	durabilityPoisoned   error
 	walForegroundFlushes atomic.Uint64
 	walGroupFlushes      atomic.Uint64
@@ -60,6 +62,8 @@ type Store struct {
 	walFailpoint         func(walBoundary) error
 	intentFailpoint      func(intentBoundary) error
 	walRollbackFailpoint func() error
+	durabilityFailpoint  func(string, bool) error
+	snapshotReadpoint    func(snapshotReadBoundary) error
 	mu                   sync.RWMutex
 }
 
@@ -152,10 +156,11 @@ func openStore(
 			return nil, errors.New("open read-only data directory: path is not a directory")
 		}
 		return &Store{
-			root:     absoluteRoot,
-			geometry: g,
-			options:  options,
-			cache:    newChunkCache(g, options.MaxLoadedChunks),
+			root:        absoluteRoot,
+			geometry:    g,
+			options:     options,
+			cache:       newChunkCache(g, options.MaxLoadedChunks),
+			pendingSync: newDurabilitySyncSet(),
 		}, nil
 	}
 	if err := os.MkdirAll(absoluteRoot, 0o755); err != nil {
@@ -202,9 +207,16 @@ func openStore(
 		writerLock:          lock,
 		cache:               newChunkCache(g, options.MaxLoadedChunks),
 		pendingPublications: make(map[geometry.Coord]pendingPublication),
+		pendingSync:         newDurabilitySyncSet(),
 		startupScanCapped:   scan.capped,
 	}
 	wal = nil
+	if err := store.beginWriterSnapshot(); err != nil {
+		if closeErr := store.walHandles.close(); closeErr != nil {
+			return nil, errors.Join(err, closeErr)
+		}
+		return nil, fmt.Errorf("open snapshot generation: %w", err)
+	}
 	if err := store.loadVersionClock(); err != nil {
 		if closeErr := store.walHandles.close(); closeErr != nil {
 			return nil, errors.Join(err, closeErr)
@@ -222,6 +234,12 @@ func openStore(
 			return nil, errors.Join(err, closeErr)
 		}
 		return nil, err
+	}
+	if err := store.finishWriterSnapshot(true); err != nil {
+		if closeErr := store.walHandles.close(); closeErr != nil {
+			return nil, errors.Join(err, closeErr)
+		}
+		return nil, fmt.Errorf("finish recovered snapshot generation: %w", err)
 	}
 	return store, nil
 }
@@ -302,18 +320,25 @@ func (s *Store) WriteChunk(coord geometry.Coord, chunk *storage.Chunk) error {
 	if err := s.checkDurabilityHealthy(); err != nil {
 		return err
 	}
-	s.retryPendingPublications()
+	_ = s.retryPendingPublications()
+	if err := s.beginWriteSnapshot(); err != nil {
+		return err
+	}
 	if s.versionClock == math.MaxUint64 {
+		s.finishRejectedSnapshot()
 		return ErrVersionOverflow
 	}
 	version := s.versionClock + 1
 	if err := s.persistVersionClock(version); err != nil {
+		s.finishRejectedSnapshot()
 		return fmt.Errorf("persist version clock: %w", err)
 	}
 	s.versionClock = version
 	if err := s.commitOrdinaryChunk(coord, chunk, version); err != nil {
+		s.finishRejectedSnapshot()
 		return err
 	}
+	s.finishCommittedSnapshot()
 	return nil
 }
 
@@ -373,28 +398,30 @@ func (s *Store) commitOrdinaryChunk(coord geometry.Coord, chunk *storage.Chunk, 
 			s.poisonDurability(fmt.Errorf("finish committed intent cleanup: %w", syncErr))
 		}
 	}
-	s.retryPendingPublications()
+	_ = s.retryPendingPublications()
 	return nil
 }
 
-func (s *Store) retryPendingPublications() {
+func (s *Store) retryPendingPublications() error {
 	syncCheckpoint := s.options.Durability == DurabilityFsyncCheckpoint
 	for coord, pending := range s.pendingPublications {
 		if err := s.persistChunkVersion(coord, pending.version, syncCheckpoint); err != nil {
 			s.reportPostCommitFailure("committed_version_publication_failed")
-			return
+			return fmt.Errorf("publish committed chunk version: %w", err)
 		}
 		if err := s.persistChunk(coord, pending.payload, pending.presence, syncCheckpoint); err != nil {
 			s.reportPostCommitFailure("committed_chunk_publication_failed")
-			return
+			return fmt.Errorf("publish committed chunk: %w", err)
 		}
 		delete(s.pendingPublications, coord)
 	}
 	if s.checkpointDue() {
 		if err := s.checkpointWAL(); err != nil {
 			s.reportPostCommitFailure("committed_checkpoint_failed")
+			return fmt.Errorf("checkpoint committed WAL: %w", err)
 		}
 	}
+	return nil
 }
 
 func (s *Store) ensureWALCommit(forceGrouped bool) error {
@@ -456,6 +483,18 @@ func (s *Store) ReadChunk(coord geometry.Coord) (chunk *storage.Chunk, returnErr
 			return chunk, nil
 		}
 	}
+	generation, err := s.beginReadOnlySnapshot()
+	if err != nil {
+		return nil, err
+	}
+	chunk, err = s.readChunkFile(coord)
+	if validationErr := s.finishReadOnlySnapshot(generation); validationErr != nil {
+		return nil, validationErr
+	}
+	return chunk, err
+}
+
+func (s *Store) readChunkFile(coord geometry.Coord) (chunk *storage.Chunk, returnErr error) {
 	path := s.chunkPath(coord)
 	file, err := os.Open(path)
 	if err != nil {
@@ -619,6 +658,9 @@ func (s *Store) persistChunk(coord geometry.Coord, payload, presence []byte, syn
 	}
 	if err := writeAtomic(path, s.encodeState(coord, payload, presence), syncData, s.atomicWriteFailpoint); err != nil {
 		return err
+	}
+	if !syncData {
+		s.pendingSync.add(path)
 	}
 	return nil
 }

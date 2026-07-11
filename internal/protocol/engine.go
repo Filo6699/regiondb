@@ -28,6 +28,10 @@ type VersionedChunkStore interface {
 	ConditionalWriteChunks([]storage.ConditionalMutation) ([]uint64, error)
 }
 
+type WALFlusher interface {
+	FlushWAL() error
+}
+
 type Engine struct {
 	geometry geometry.Geometry
 	store    ChunkStore
@@ -139,6 +143,20 @@ func (s *Session) Execute(command Command) Response {
 			return *response
 		}
 		return bulkResponse(infoPayload(s.engine.store.RuntimeStats()))
+	case "WALFLUSH":
+		if response := requireArity(command.Args, 0); response != nil {
+			return *response
+		}
+		store, ok := s.engine.store.(WALFlusher)
+		if !ok {
+			return errorResponse("STORAGE", "durability barrier unavailable")
+		}
+		s.engine.mu.Lock()
+		defer s.engine.mu.Unlock()
+		if err := store.FlushWAL(); err != nil {
+			return errorResponse("STORAGE", "durability barrier failed")
+		}
+		return okResponse("")
 	case "GET":
 		return s.get(command.Args)
 	case "MGET":

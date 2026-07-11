@@ -93,6 +93,10 @@ func (s *Store) ScanChunkCoords(
 	if s.closed {
 		return nil, false, errors.New("scan chunk coordinates: store is closed")
 	}
+	generation, err := s.beginReadOnlySnapshot()
+	if err != nil {
+		return nil, false, err
+	}
 
 	candidates := newBoundedChunkCoords(hasCursor, cursor, limit)
 	directories, err := os.ReadDir(s.root)
@@ -122,6 +126,9 @@ func (s *Store) ScanChunkCoords(
 			}
 			candidates.insert(coord)
 		}
+	}
+	if err := s.finishReadOnlySnapshot(generation); err != nil {
+		return nil, false, err
 	}
 	return candidates.sorted(), candidates.overflow, nil
 }

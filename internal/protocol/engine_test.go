@@ -94,6 +94,26 @@ func TestSessionWithoutAuthentication(t *testing.T) {
 	}
 }
 
+func TestSessionWALFlush(t *testing.T) {
+	t.Parallel()
+
+	g := testGeometry(t)
+	store := &memoryStore{chunks: make(map[geometry.Coord]*storage.Chunk)}
+	engine, err := NewEngineWithoutAuth(g, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := engine.NewSession()
+
+	assertResponse(t, session, "WALFLUSH extra\r\n", "-ERR ARITY wrong number of arguments\r\n")
+	assertResponse(t, session, "WALFLUSH\r\n", "+OK\r\n")
+	if store.flushCount != 1 {
+		t.Fatalf("FlushWAL() calls = %d, want 1", store.flushCount)
+	}
+	store.flushErr = errors.New("injected barrier failure")
+	assertResponse(t, session, "WALFLUSH\r\n", "-ERR STORAGE durability barrier failed\r\n")
+}
+
 func TestSessionBlockAndChunkCommands(t *testing.T) {
 	t.Parallel()
 
@@ -766,6 +786,13 @@ type memoryStore struct {
 	writeErrorAt int
 	stats        storage.RuntimeStats
 	writeCount   int
+	flushCount   int
+	flushErr     error
+}
+
+func (s *memoryStore) FlushWAL() error {
+	s.flushCount++
+	return s.flushErr
 }
 
 func (s *memoryStore) RuntimeStats() storage.RuntimeStats {
