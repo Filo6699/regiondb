@@ -60,6 +60,7 @@ func TestParseConfig(t *testing.T) {
 		t.Fatalf("parseConfig() geometry = %+v", got.geometry)
 	}
 	if got.durability != fs_split.DurabilityRelaxed ||
+		got.checkpointCompression != fs_split.CheckpointCompressionNone ||
 		got.checkpointRecords != defaults.CheckpointRecords ||
 		got.checkpointBytes != defaults.CheckpointBytes ||
 		got.maxLoadedChunks != defaults.MaxLoadedChunks ||
@@ -242,6 +243,7 @@ func TestParseConfigStorageOptions(t *testing.T) {
 	}
 	args := append(append([]string(nil), base...),
 		"-durability", "fsync-wal",
+		"-checkpoint-compression", "zrle",
 		"-checkpoint-records", "7",
 		"-checkpoint-bytes", "4096",
 		"-max-loaded-chunks", "3",
@@ -262,6 +264,7 @@ func TestParseConfigStorageOptions(t *testing.T) {
 		t.Fatalf("parseConfig() error = %v", err)
 	}
 	if got.durability != fs_split.DurabilityFsyncWAL ||
+		got.checkpointCompression != fs_split.CheckpointCompressionZRLE ||
 		got.checkpointRecords != 7 || got.checkpointBytes != 4096 ||
 		got.maxLoadedChunks != 3 || got.maxOpenWALStreams != 1 ||
 		got.walGroupCommitUpdates != 5 || got.workers != 2 ||
@@ -277,6 +280,7 @@ func TestParseConfigStorageOptions(t *testing.T) {
 
 	for _, invalid := range [][]string{
 		{"-durability", "unknown"},
+		{"-checkpoint-compression", "unknown"},
 		{"-checkpoint-records", "0"},
 		{"-checkpoint-bytes", "0"},
 		{"-max-loaded-chunks", "0"},

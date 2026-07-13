@@ -269,7 +269,11 @@ func TestStoreRejectsGeometryMismatch(t *testing.T) {
 		CheckpointBytes:   1 << 20,
 	})
 	coord := geometry.Coord{X: 3, Y: 4}
-	if err := firstStore.WriteChunk(coord, mustChunk(t, firstGeometry)); err != nil {
+	firstChunk := mustChunk(t, firstGeometry)
+	if err := firstChunk.Set(geometry.Offset{}, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstStore.WriteChunk(coord, firstChunk); err != nil {
 		t.Fatal(err)
 	}
 	if err := firstStore.WriteChunk(coord, mustChunk(t, mustGeometry(t, geometry.Config{
@@ -1327,6 +1331,7 @@ func TestOpenRejectsInvalidOptions(t *testing.T) {
 	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 1})
 	for _, options := range []Options{
 		{Durability: "unknown"},
+		{CheckpointCompression: "unknown"},
 		{CheckpointBytes: -1},
 		{MaxLoadedChunks: -1},
 		{MaxOpenWALHandles: -1},
@@ -1442,7 +1447,15 @@ func TestStoreRuntimeStats(t *testing.T) {
 	second := geometry.Coord{X: 2}
 	missing := geometry.Coord{X: 3}
 
-	if err := store.WriteChunk(first, mustChunk(t, g)); err != nil {
+	firstChunk := mustChunk(t, g)
+	if err := firstChunk.Set(geometry.Offset{}, 1); err != nil {
+		t.Fatal(err)
+	}
+	secondChunk := mustChunk(t, g)
+	if err := secondChunk.Set(geometry.Offset{}, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteChunk(first, firstChunk); err != nil {
 		t.Fatalf("WriteChunk(%v): %v", first, err)
 	}
 	if _, err := store.ReadChunk(first); err != nil {
@@ -1451,10 +1464,10 @@ func TestStoreRuntimeStats(t *testing.T) {
 	if _, err := store.ReadChunk(missing); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("ReadChunk(%v) error = %v, want os.ErrNotExist", missing, err)
 	}
-	if err := store.WriteChunk(second, mustChunk(t, g)); err != nil {
+	if err := store.WriteChunk(second, secondChunk); err != nil {
 		t.Fatalf("WriteChunk(%v): %v", second, err)
 	}
-	if err := store.WriteChunk(first, mustChunk(t, g)); err != nil {
+	if err := store.WriteChunk(first, firstChunk); err != nil {
 		t.Fatalf("WriteChunk(%v): %v", first, err)
 	}
 

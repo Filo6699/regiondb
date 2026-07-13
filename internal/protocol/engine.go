@@ -173,6 +173,8 @@ func (s *Session) Execute(command Command) Response {
 		return s.chunk(command.Args)
 	case "CHUNKBIN":
 		return s.chunkBinary(command.Args)
+	case "CHUNKBINC":
+		return s.chunkBinaryCompressed(command.Args)
 	case "CHUNKEXISTS":
 		return s.chunkExists(command.Args)
 	case "CHUNKSET":
@@ -554,6 +556,22 @@ func (s *Session) chunkBinary(args []string) Response {
 		return bulkResponse(append(payload, chunk.PresenceBytes()...))
 	}
 	return bulkResponse(chunk.Bytes())
+}
+
+func (s *Session) chunkBinaryCompressed(args []string) Response {
+	state, response := parseChunkReadMode(args)
+	if response != nil {
+		return *response
+	}
+	chunk, response := s.readChunkCommand(args[:2])
+	if response != nil {
+		return *response
+	}
+	payload := chunk.Bytes()
+	if state {
+		payload = append(payload, chunk.PresenceBytes()...)
+	}
+	return bulkResponse(storage.EncodeZRLE(payload))
 }
 
 func (s *Session) chunkExists(args []string) Response {

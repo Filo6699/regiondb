@@ -295,5 +295,9 @@ func newDurabilityBoundaryStore(
 		CheckpointRecords: checkpointRecords,
 		CheckpointBytes:   1 << 20,
 	})
-	return store, mustChunk(t, g)
+	chunk := mustChunk(t, g)
+	if err := chunk.Set(geometry.Offset{}, 1); err != nil {
+		t.Fatal(err)
+	}
+	return store, chunk
 }

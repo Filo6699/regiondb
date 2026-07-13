@@ -141,12 +141,16 @@ func TestSessionBlockAndChunkCommands(t *testing.T) {
 		{frame: "CHUNK -1 0\r\n", want: "$4\r\n0000\r\n"},
 		{frame: "CHUNK -1 0 STATE\r\n", want: "$7\r\n0000|00\r\n"},
 		{frame: "CHUNKBIN -1 0 STATE\r\n", want: "$3\r\n\x00\x00\x00\r\n"},
+		{frame: "CHUNKBINC -1 0\r\n", want: "$1\r\n\x81\r\n"},
+		{frame: "CHUNKBINC -1 0 STATE\r\n", want: "$1\r\n\x82\r\n"},
 		{frame: "CHUNKSET 2 -3 4104\r\n", want: "+OK\r\n"},
 		{frame: "CHUNKEXISTS 2 -3\r\n", want: "+OK 1\r\n"},
 		{frame: "CHUNK 2 -3\r\n", want: "$4\r\n4104\r\n"},
 		{frame: "CHUNK 2 -3 STATE\r\n", want: "$7\r\n4104|0f\r\n"},
 		{frame: "CHUNKBIN 2 -3\r\n", want: "$2\r\n\x41\x04\r\n"},
 		{frame: "CHUNKBIN 2 -3 STATE\r\n", want: "$3\r\n\x41\x04\x0f\r\n"},
+		{frame: "CHUNKBINC 2 -3\r\n", want: "$3\r\n\x01\x41\x04\r\n"},
+		{frame: "CHUNKBINC 2 -3 STATE\r\n", want: "$4\r\n\x02\x41\x04\x0f\r\n"},
 		{frame: "GET 4 -6\r\n", want: "$1\r\n1\r\n"},
 		{frame: "GET 5 -6\r\n", want: "$1\r\n0\r\n"},
 		{frame: "GET 4 -5\r\n", want: "$1\r\n1\r\n"},
@@ -166,6 +170,7 @@ func TestSessionBlockAndChunkCommands(t *testing.T) {
 		{frame: "CHUNK 99 99 STATE\r\n", want: "-ERR NOT_FOUND chunk does not exist\r\n"},
 		{frame: "CHUNKBIN 99 99\r\n", want: "-ERR NOT_FOUND chunk does not exist\r\n"},
 		{frame: "CHUNKBIN 99 99 STATE\r\n", want: "-ERR NOT_FOUND chunk does not exist\r\n"},
+		{frame: "CHUNKBINC 99 99\r\n", want: "-ERR NOT_FOUND chunk does not exist\r\n"},
 	}
 
 	for _, test := range tests {
@@ -518,6 +523,11 @@ func TestSessionRejectsInvalidCommands(t *testing.T) {
 			want:  "-ERR MODE chunk mode must be STATE\r\n",
 		},
 		{
+			name:  "compressed chunk binary mode",
+			frame: "CHUNKBINC 0 0 OTHER\r\n",
+			want:  "-ERR MODE chunk mode must be STATE\r\n",
+		},
+		{
 			name:  "chunk state mode",
 			frame: "CHUNKSET 0 0 OTHER 0000|00\r\n",
 			want:  "-ERR MODE chunk mode must be STATE\r\n",
@@ -616,6 +626,7 @@ func TestSessionEnforcesCommandArity(t *testing.T) {
 		"EXISTS 1 2 3\r\n",
 		"CHUNK 1\r\n",
 		"CHUNKBIN 1\r\n",
+		"CHUNKBINC 1\r\n",
 		"CHUNKEXISTS 1\r\n",
 		"CHUNKSET 1 2\r\n",
 		"CHUNKSCAN\r\n",
@@ -663,6 +674,7 @@ func BenchmarkSessionCommands(b *testing.B) {
 		},
 		{name: "CHUNK_text", frame: []byte("CHUNK 2 -3\r\n"), want: "$4\r\n4104\r\n"},
 		{name: "CHUNK_binary", frame: []byte("CHUNKBIN 2 -3\r\n"), want: "$2\r\n\x41\x04\r\n"},
+		{name: "CHUNK_compressed", frame: []byte("CHUNKBINC 2 -3\r\n"), want: "$3\r\n\x01\x41\x04\r\n"},
 	}
 	for _, benchmark := range benchmarks {
 		b.Run(benchmark.name, func(b *testing.B) {
@@ -702,6 +714,7 @@ func TestSessionStorageErrors(t *testing.T) {
 	assertResponse(t, session, "GET 0 0\r\n", "-ERR STORAGE read failed\r\n")
 	assertResponse(t, session, "MGET 0 0\r\n", "-ERR STORAGE read failed\r\n")
 	assertResponse(t, session, "CHUNKBIN 0 0\r\n", "-ERR STORAGE read failed\r\n")
+	assertResponse(t, session, "CHUNKBINC 0 0\r\n", "-ERR STORAGE read failed\r\n")
 	assertResponse(t, session, "CHUNKEXISTS 0 0\r\n", "-ERR STORAGE read failed\r\n")
 	store.readErr = nil
 	assertResponse(t, session, "SET 0 0 1\r\n", "+OK\r\n")

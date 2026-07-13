@@ -87,7 +87,8 @@ func testIntegrationTCPCommandLifecycle(t *testing.T) {
 
 	request := "PING\r\nAUTH secret\r\nSET -1 2 9\r\nINFO\r\nEXISTS -1 2\r\nGET -1 2\r\nCHUNK -1 1\r\n" +
 		"MSET 10 10 3 11 10 4\r\nMGET 10 10 11 10 12 10\r\n" +
-		"CHUNK -1 1 STATE\r\nCHUNKBIN -1 1 STATE\r\nCHUNKSET 2 2 STATE 9100|01\r\nCHUNK 2 2 STATE\r\n" +
+		"CHUNK -1 1 STATE\r\nCHUNKBIN -1 1 STATE\r\nCHUNKBINC -1 1 STATE\r\n" +
+		"CHUNKSET 2 2 STATE 9100|01\r\nCHUNK 2 2 STATE\r\n" +
 		"CHUNKEXISTS -1 1\r\nCHUNKEXISTS 99 99\r\nSET -1 2 0\r\nEXISTS -1 2\r\n" +
 		"UNSET -1 2\r\nGET -1 2\r\nEXISTS -1 2\r\nCHUNKEXISTS -1 1\r\n" +
 		"CHUNKSCAN 1\r\nCHUNKSCAN 1 2 2\r\nCHUNKRANGE 2 2 5 5\r\nCHUNKRADIUS 2 2 0\r\nQUIT\r\n"
@@ -145,6 +146,8 @@ func testIntegrationTCPCommandLifecycle(t *testing.T) {
 		"9000|02\r\n",
 		"$3\r\n",
 		"\x90\x00\x02\r\n",
+		"$5\r\n",
+		"\x00\x90\x80\x00\x02\r\n",
 		"+OK\r\n",
 		"$7\r\n",
 		"0100|01\r\n",

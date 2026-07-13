@@ -35,16 +35,19 @@ func (s *Store) checkpointDue() bool {
 
 func (s *Store) checkpointWAL() error {
 	syncData := s.options.Durability != DurabilityRelaxed
-	if syncData {
-		_, _, err := s.scanWAL(func(record walRecord) error {
-			if err := s.persistChunk(record.coord, record.payload, record.presence, true); err != nil {
-				return fmt.Errorf("checkpoint WAL record: %w", err)
-			}
-			return nil
-		})
-		if err != nil {
-			return fmt.Errorf("checkpoint WAL: %w", err)
+	_, _, err := s.scanWAL(func(record walRecord) error {
+		if err := s.persistCheckpointChunk(
+			record.coord,
+			record.payload,
+			record.presence,
+			syncData,
+		); err != nil {
+			return fmt.Errorf("checkpoint WAL record: %w", err)
 		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("checkpoint WAL: %w", err)
 	}
 	if err := s.clearWAL(syncData); err != nil {
 		return fmt.Errorf("checkpoint WAL: %w", err)

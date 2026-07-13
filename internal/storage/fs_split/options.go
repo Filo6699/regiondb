@@ -17,16 +17,21 @@ const (
 )
 
 type DurabilityMode string
+type CheckpointCompression string
 
 const (
 	DurabilityRelaxed         DurabilityMode = "relaxed"
 	DurabilityFsyncWAL        DurabilityMode = "fsync-wal"
 	DurabilityFsyncCheckpoint DurabilityMode = "fsync-checkpoint"
+
+	CheckpointCompressionNone CheckpointCompression = "none"
+	CheckpointCompressionZRLE CheckpointCompression = "zrle"
 )
 
 type Options struct {
 	ReadOnly              bool
 	Durability            DurabilityMode
+	CheckpointCompression CheckpointCompression
 	CheckpointRecords     uint64
 	CheckpointBytes       int64
 	MaxLoadedChunks       int
@@ -44,6 +49,17 @@ func (options Options) validated() (Options, error) {
 	case DurabilityRelaxed, DurabilityFsyncWAL, DurabilityFsyncCheckpoint:
 	default:
 		return Options{}, fmt.Errorf("invalid durability mode %q", options.Durability)
+	}
+	if options.CheckpointCompression == "" {
+		options.CheckpointCompression = CheckpointCompressionNone
+	}
+	switch options.CheckpointCompression {
+	case CheckpointCompressionNone, CheckpointCompressionZRLE:
+	default:
+		return Options{}, fmt.Errorf(
+			"invalid checkpoint compression %q",
+			options.CheckpointCompression,
+		)
 	}
 	if options.CheckpointRecords == 0 {
 		options.CheckpointRecords = DefaultCheckpointRecords

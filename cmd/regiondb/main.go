@@ -48,6 +48,7 @@ type config struct {
 	tlsCert               string
 	tlsKey                string
 	durability            fs_split.DurabilityMode
+	checkpointCompression fs_split.CheckpointCompression
 	checkpointRecords     uint64
 	checkpointBytes       int64
 	maxLoadedChunks       int
@@ -112,6 +113,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnEr
 	}
 	store, err := fs_split.OpenWithOptions(config.dataDir, g, fs_split.Options{
 		Durability:            config.durability,
+		CheckpointCompression: config.checkpointCompression,
 		CheckpointRecords:     config.checkpointRecords,
 		CheckpointBytes:       config.checkpointBytes,
 		MaxLoadedChunks:       config.maxLoadedChunks,
@@ -304,6 +306,7 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	var largeChunkEdge uint64
 	var blockBits uint64
 	var durability string
+	var checkpointCompression string
 	flags.StringVar(&result.listenAddress, "listen", defaults.Address, "TCP listen address in host:port form")
 	flags.StringVar(&result.dataDir, "data-dir", "", "directory for chunk data")
 	flags.StringVar(&result.token, "token", "", "authentication token")
@@ -312,6 +315,12 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	flags.StringVar(&result.tlsCert, "tls-cert", "", "PEM TLS certificate file")
 	flags.StringVar(&result.tlsKey, "tls-key", "", "PEM TLS private key file")
 	flags.StringVar(&durability, "durability", string(fs_split.DurabilityRelaxed), "durability mode: relaxed, fsync-wal, or fsync-checkpoint")
+	flags.StringVar(
+		&checkpointCompression,
+		"checkpoint-compression",
+		string(fs_split.CheckpointCompressionNone),
+		"checkpoint image compression: none or zrle",
+	)
 	flags.Uint64Var(&result.checkpointRecords, "checkpoint-records", defaults.CheckpointRecords, "WAL records between checkpoints")
 	flags.Int64Var(&result.checkpointBytes, "checkpoint-bytes", defaults.CheckpointBytes, "WAL bytes between checkpoints")
 	flags.IntVar(&result.maxLoadedChunks, "max-loaded-chunks", defaults.MaxLoadedChunks, "maximum chunks retained in memory")
@@ -370,6 +379,15 @@ func parseConfig(args []string, stderr io.Writer) (config, error) {
 	case fs_split.DurabilityRelaxed, fs_split.DurabilityFsyncWAL, fs_split.DurabilityFsyncCheckpoint:
 	default:
 		return config{}, fmt.Errorf("invalid -durability value %q", durability)
+	}
+	result.checkpointCompression = fs_split.CheckpointCompression(checkpointCompression)
+	switch result.checkpointCompression {
+	case fs_split.CheckpointCompressionNone, fs_split.CheckpointCompressionZRLE:
+	default:
+		return config{}, fmt.Errorf(
+			"invalid -checkpoint-compression value %q",
+			checkpointCompression,
+		)
 	}
 	if result.checkpointRecords == 0 {
 		return config{}, errors.New("-checkpoint-records must be positive")

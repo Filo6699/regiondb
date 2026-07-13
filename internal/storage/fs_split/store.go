@@ -20,11 +20,14 @@ import (
 )
 
 const (
-	fileMagic            = "RGDBSPL2"
+	fileMagic            = "RGDBSPL3"
+	v2FileMagic          = "RGDBSPL2"
 	legacyFileMagic      = "RGDBSPL1"
 	headerBytes          = 44
 	checksumSize         = 4
 	chunkTemporaryPrefix = ".regiondb-chunk-"
+	imageCodecNone       = 0
+	imageCodecZRLE       = 1
 	// StartupScanEntryLimit bounds the entries processed by stale
 	// temporary-file cleanup during one startup.
 	StartupScanEntryLimit = 100_000
@@ -508,18 +511,22 @@ func (s *Store) readChunkFile(coord geometry.Coord) (chunk *storage.Chunk, retur
 	}()
 
 	legacySize := int64(headerBytes) + int64(s.geometry.PayloadBytes()) + checksumSize
-	expectedSize := legacySize + int64(s.geometry.PresenceBytes())
+	stateSize := s.geometry.PayloadBytes() + s.geometry.PresenceBytes()
+	expectedSize := int64(headerBytes) + int64(stateSize) + checksumSize
+	maxV3Size := int64(headerBytes) + int64(stateSize)*2 + checksumSize
 	info, err := file.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("stat chunk: %w", err)
 	}
-	if info.Size() != expectedSize && info.Size() != legacySize {
+	if info.Size() != legacySize &&
+		info.Size() != expectedSize &&
+		(info.Size() < headerBytes+checksumSize || info.Size() > maxV3Size) {
 		return nil, fmt.Errorf(
-			"%w: file size is %d, want %d or legacy size %d",
+			"%w: file size is %d, want v1 size %d, v2 size %d, or bounded v3 size",
 			ErrCorrupt,
 			info.Size(),
-			expectedSize,
 			legacySize,
+			expectedSize,
 		)
 	}
 
@@ -548,15 +555,38 @@ func (s *Store) encode(coord geometry.Coord, payload []byte) []byte {
 }
 
 func (s *Store) encodeState(coord geometry.Coord, payload, presence []byte) []byte {
+	return s.encodeImage(coord, payload, presence, v2FileMagic, imageCodecNone)
+}
+
+func (s *Store) encodeCheckpointState(coord geometry.Coord, payload, presence []byte) []byte {
+	codec := byte(imageCodecNone)
+	if s.options.CheckpointCompression == CheckpointCompressionZRLE {
+		state := make([]byte, 0, len(payload)+len(presence))
+		state = append(state, payload...)
+		state = append(state, presence...)
+		compressed := storage.EncodeZRLE(state)
+		if len(compressed) < len(state) {
+			return s.encodeImage(coord, compressed, nil, fileMagic, imageCodecZRLE)
+		}
+	}
+	return s.encodeImage(coord, payload, presence, fileMagic, codec)
+}
+
+func (s *Store) encodeImage(
+	coord geometry.Coord,
+	payload, presence []byte,
+	magic string,
+	codec byte,
+) []byte {
 	config := s.geometry.Config()
 	encoded := make([]byte, 0, headerBytes+len(payload)+len(presence)+checksumSize)
-	encoded = append(encoded, fileMagic...)
+	encoded = append(encoded, magic...)
 	encoded = bitcodec.AppendUint32(encoded, config.ChunkEdge)
 	encoded = bitcodec.AppendUint32(encoded, config.LargeChunkEdge)
-	encoded = append(encoded, config.BlockBits, 0, 0, 0)
+	encoded = append(encoded, config.BlockBits, codec, 0, 0)
 	encoded = bitcodec.AppendUint64(encoded, uint64(coord.X))
 	encoded = bitcodec.AppendUint64(encoded, uint64(coord.Y))
-	encoded = bitcodec.AppendUint64(encoded, uint64(len(payload)))
+	encoded = bitcodec.AppendUint64(encoded, uint64(s.geometry.PayloadBytes()))
 	encoded = append(encoded, payload...)
 	encoded = append(encoded, presence...)
 	return bitcodec.AppendUint32(encoded, crc32.ChecksumIEEE(encoded))
@@ -567,7 +597,7 @@ func (s *Store) decode(coord geometry.Coord, encoded []byte) (*storage.Chunk, er
 		return nil, fmt.Errorf("%w: file is shorter than the header", ErrCorrupt)
 	}
 	magic := string(encoded[:len(fileMagic)])
-	if magic != fileMagic && magic != legacyFileMagic {
+	if magic != fileMagic && magic != v2FileMagic && magic != legacyFileMagic {
 		return nil, fmt.Errorf("%w: invalid magic", ErrCorrupt)
 	}
 	storedChecksum, err := bitcodec.Uint32(encoded[len(encoded)-checksumSize:])
@@ -586,8 +616,15 @@ func (s *Store) decode(coord geometry.Coord, encoded []byte) (*storage.Chunk, er
 	if err != nil {
 		return nil, fmt.Errorf("%w: read large-chunk edge: %v", ErrCorrupt, err)
 	}
-	if !bytes.Equal(encoded[17:20], []byte{0, 0, 0}) {
+	if !bytes.Equal(encoded[18:20], []byte{0, 0}) {
 		return nil, fmt.Errorf("%w: reserved header bytes are nonzero", ErrCorrupt)
+	}
+	codec := encoded[17]
+	if magic != fileMagic && codec != imageCodecNone {
+		return nil, fmt.Errorf("%w: reserved header bytes are nonzero", ErrCorrupt)
+	}
+	if magic == fileMagic && codec != imageCodecNone && codec != imageCodecZRLE {
+		return nil, fmt.Errorf("%w: unsupported image codec %d", ErrCorrupt, codec)
 	}
 	storedX, err := bitcodec.Uint64(encoded[20:28])
 	if err != nil {
@@ -615,20 +652,43 @@ func (s *Store) decode(coord geometry.Coord, encoded []byte) (*storage.Chunk, er
 		return nil, fmt.Errorf("%w: payload size is %d, want %d", ErrCorrupt, payloadSize, s.geometry.PayloadBytes())
 	}
 
-	payloadEnd := headerBytes + s.geometry.PayloadBytes()
-	payload := encoded[headerBytes:payloadEnd]
 	var chunk *storage.Chunk
-	if magic == legacyFileMagic {
+	switch magic {
+	case legacyFileMagic:
+		payloadEnd := headerBytes + s.geometry.PayloadBytes()
 		if len(encoded) != payloadEnd+checksumSize {
 			return nil, fmt.Errorf("%w: invalid legacy file size", ErrCorrupt)
 		}
+		payload := encoded[headerBytes:payloadEnd]
 		chunk, err = storage.ChunkFromLegacyBytes(s.geometry, payload)
-	} else {
+	case v2FileMagic:
+		payloadEnd := headerBytes + s.geometry.PayloadBytes()
 		if len(encoded) != payloadEnd+s.geometry.PresenceBytes()+checksumSize {
 			return nil, fmt.Errorf("%w: invalid file size", ErrCorrupt)
 		}
+		payload := encoded[headerBytes:payloadEnd]
 		presence := encoded[payloadEnd : len(encoded)-checksumSize]
 		chunk, err = storage.ChunkFromState(s.geometry, payload, presence)
+	case fileMagic:
+		stateSize := s.geometry.PayloadBytes() + s.geometry.PresenceBytes()
+		state := encoded[headerBytes : len(encoded)-checksumSize]
+		switch codec {
+		case imageCodecNone:
+			if len(state) != stateSize {
+				return nil, fmt.Errorf("%w: invalid uncompressed v3 file size", ErrCorrupt)
+			}
+		case imageCodecZRLE:
+			state, err = storage.DecodeZRLE(state, stateSize)
+			if err != nil {
+				return nil, fmt.Errorf("%w: decode zrle image: %v", ErrCorrupt, err)
+			}
+		}
+		payloadEnd := s.geometry.PayloadBytes()
+		chunk, err = storage.ChunkFromState(
+			s.geometry,
+			state[:payloadEnd],
+			state[payloadEnd:],
+		)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: decode payload: %v", ErrCorrupt, err)
@@ -661,6 +721,86 @@ func (s *Store) persistChunk(coord geometry.Coord, payload, presence []byte, syn
 	}
 	if !syncData {
 		s.pendingSync.add(path)
+	}
+	return nil
+}
+
+func (s *Store) persistCheckpointChunk(
+	coord geometry.Coord,
+	payload, presence []byte,
+	syncData bool,
+) error {
+	if emptyPresence(presence) {
+		return s.collectEmptyChunk(coord, syncData)
+	}
+	path := s.chunkPath(coord)
+	directory := filepath.Dir(path)
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return fmt.Errorf("create large-chunk directory: %w", err)
+	}
+	if err := writeAtomic(
+		path,
+		s.encodeCheckpointState(coord, payload, presence),
+		syncData,
+		s.atomicWriteFailpoint,
+	); err != nil {
+		return err
+	}
+	if !syncData {
+		s.pendingSync.add(path)
+	}
+	return nil
+}
+
+func emptyPresence(presence []byte) bool {
+	for _, value := range presence {
+		if value != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Store) collectEmptyChunk(coord geometry.Coord, _ bool) error {
+	path := s.chunkPath(coord)
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		if err := commitDirectoryEntry(
+			syncParentDirectory(filepath.Dir(path)),
+			replaceCommitsDirectoryEntry,
+		); err != nil {
+			return fmt.Errorf("commit absent empty chunk: %w", err)
+		}
+		delete(s.pendingSync.paths, path)
+		s.cache.remove(coord)
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("stat empty chunk: %w", err)
+	}
+
+	directory := filepath.Dir(path)
+	tombstone, err := os.CreateTemp(directory, chunkTemporaryPrefix+"gc-*")
+	if err != nil {
+		return fmt.Errorf("create empty chunk tombstone: %w", err)
+	}
+	tombstonePath := tombstone.Name()
+	if err := tombstone.Close(); err != nil {
+		_ = os.Remove(tombstonePath)
+		return fmt.Errorf("close empty chunk tombstone: %w", err)
+	}
+	if err := replaceFile(path, tombstonePath, true); err != nil {
+		_ = os.Remove(tombstonePath)
+		return fmt.Errorf("replace empty chunk with tombstone: %w", err)
+	}
+	delete(s.pendingSync.paths, path)
+	if err := commitDirectoryEntry(
+		syncParentDirectory(directory),
+		replaceCommitsDirectoryEntry,
+	); err != nil {
+		return fmt.Errorf("commit empty chunk collection: %w", err)
+	}
+	s.cache.remove(coord)
+	if err := os.Remove(tombstonePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove empty chunk tombstone: %w", err)
 	}
 	return nil
 }
