@@ -161,6 +161,7 @@ func ServeWithOptions(
 		options.AuthFailureDelay,
 		options.AuthFailureLimit,
 		options.AuthBanDuration,
+		engine.Metrics(),
 	)
 	shutdown := func() {
 		shutdownOnce.Do(func() {
@@ -193,6 +194,7 @@ func ServeWithOptions(
 					if serveCtx.Err() != nil {
 						connections.Delete(connection)
 						_ = connection.Close()
+						engine.Metrics().ConnectionClosed()
 						<-slots
 						return
 					}
@@ -209,6 +211,7 @@ func ServeWithOptions(
 					logConnectionTermination(options.Logger, termination)
 					connections.Delete(connection)
 					_ = connection.Close()
+					engine.Metrics().ConnectionClosed()
 					<-slots
 				}
 			}
@@ -231,9 +234,11 @@ func ServeWithOptions(
 		}
 
 		connections.Store(connection, struct{}{})
+		engine.Metrics().ConnectionOpened()
 		if serveCtx.Err() != nil {
 			_ = connection.Close()
 			connections.Delete(connection)
+			engine.Metrics().ConnectionClosed()
 			waitForWorkers()
 			return nil
 		}
@@ -244,6 +249,7 @@ func ServeWithOptions(
 			case <-serveCtx.Done():
 				_ = connection.Close()
 				connections.Delete(connection)
+				engine.Metrics().ConnectionClosed()
 				<-slots
 				waitForWorkers()
 				return nil
@@ -251,6 +257,7 @@ func ServeWithOptions(
 		case <-serveCtx.Done():
 			_ = connection.Close()
 			connections.Delete(connection)
+			engine.Metrics().ConnectionClosed()
 			waitForWorkers()
 			return nil
 		default:
@@ -268,6 +275,7 @@ func ServeWithOptions(
 			}
 			_ = connection.Close()
 			connections.Delete(connection)
+			engine.Metrics().ConnectionClosed()
 		}
 	}
 }

@@ -9,10 +9,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Filo6699/regiondb/internal/bitcodec"
 	"github.com/Filo6699/regiondb/internal/geometry"
 	"github.com/Filo6699/regiondb/internal/storage"
+	"github.com/Filo6699/regiondb/internal/telemetry"
 )
 
 type ChunkStore interface {
@@ -38,6 +40,7 @@ type Engine struct {
 	token    string
 	auth     bool
 	mu       sync.RWMutex
+	metrics  telemetry.Metrics
 }
 
 type Session struct {
@@ -84,6 +87,10 @@ func (e *Engine) NewSession() *Session {
 	}
 }
 
+func (e *Engine) Metrics() *telemetry.Metrics {
+	return &e.metrics
+}
+
 func (s *Session) Authenticated() bool {
 	return s.authenticated
 }
@@ -112,7 +119,12 @@ func (s *Session) Handle(frame []byte) Response {
 	return s.Execute(command)
 }
 
-func (s *Session) Execute(command Command) Response {
+func (s *Session) Execute(command Command) (response Response) {
+	started := time.Now()
+	defer func() {
+		s.engine.metrics.ObserveCommand(time.Since(started), response.kind == responseError)
+	}()
+
 	if s.closed {
 		return errorResponse("CLOSED", "session is closed")
 	}
@@ -143,6 +155,11 @@ func (s *Session) Execute(command Command) Response {
 			return *response
 		}
 		return bulkResponse(infoPayload(s.engine.store.RuntimeStats()))
+	case "METRICS":
+		if response := requireArity(command.Args, 0); response != nil {
+			return *response
+		}
+		return bulkResponse(s.engine.metrics.AppendPrometheus(nil, s.engine.store.RuntimeStats()))
 	case "WALFLUSH":
 		if response := requireArity(command.Args, 0); response != nil {
 			return *response

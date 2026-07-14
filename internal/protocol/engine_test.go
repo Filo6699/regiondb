@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/Filo6699/regiondb/internal/geometry"
@@ -112,6 +113,40 @@ func TestSessionWALFlush(t *testing.T) {
 	}
 	store.flushErr = errors.New("injected barrier failure")
 	assertResponse(t, session, "WALFLUSH\r\n", "-ERR STORAGE durability barrier failed\r\n")
+}
+
+func TestSessionMetricsPrometheusSnapshot(t *testing.T) {
+	t.Parallel()
+
+	g := testGeometry(t)
+	store := &memoryStore{
+		chunks: make(map[geometry.Coord]*storage.Chunk),
+		stats: storage.RuntimeStats{
+			CacheHits:    7,
+			LoadedChunks: 3,
+		},
+	}
+	engine, err := NewEngineWithoutAuth(g, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := engine.NewSession()
+	assertResponse(t, session, "METRICS extra\r\n", "-ERR ARITY wrong number of arguments\r\n")
+	response := session.Handle([]byte("METRICS\r\n"))
+	if response.kind != responseBulk {
+		t.Fatalf("METRICS response kind = %d, want bulk", response.kind)
+	}
+	for _, want := range []string{
+		"regiondb_commands_total 1\n",
+		"regiondb_command_errors_total 1\n",
+		"regiondb_command_duration_seconds_count 1\n",
+		"regiondb_cache_hits_total 7\n",
+		"regiondb_loaded_chunks 3\n",
+	} {
+		if !strings.Contains(string(response.payload), want) {
+			t.Fatalf("METRICS payload does not contain %q:\n%s", want, response.payload)
+		}
+	}
 }
 
 func TestSessionBlockAndChunkCommands(t *testing.T) {

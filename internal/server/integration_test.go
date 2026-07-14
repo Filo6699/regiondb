@@ -9,6 +9,8 @@ import (
 	"io"
 	"net"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,9 +23,49 @@ import (
 func TestIntegrationTCP(t *testing.T) {
 	t.Run("command lifecycle", testIntegrationTCPCommandLifecycle)
 	t.Run("conditional chunks", testIntegrationTCPConditionalChunks)
+	t.Run("metrics", testIntegrationTCPMetrics)
 	t.Run("concurrent clients", testIntegrationTCPConcurrentClients)
 	t.Run("overload response", testIntegrationTCPOverloadResponse)
 	t.Run("request deadline", testIntegrationTCPRequestDeadline)
+}
+
+func testIntegrationTCPMetrics(t *testing.T) {
+	address := startIntegrationServer(t, DefaultOptions())
+	connection := dialIntegrationServer(t, address)
+	defer func() { _ = connection.Close() }()
+
+	if err := writeIntegrationRequest(connection, "AUTH secret\r\nMETRICS\r\n"); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	reader := bufio.NewReader(connection)
+	if response, err := reader.ReadString('\n'); err != nil || response != "+OK\r\n" {
+		t.Fatalf("AUTH response = %q, error = %v", response, err)
+	}
+	header, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read METRICS header: %v", err)
+	}
+	length, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(header, "$"), "\r\n"))
+	if err != nil || length < 0 {
+		t.Fatalf("METRICS header = %q, error = %v", header, err)
+	}
+	payload := make([]byte, length+2)
+	if _, err := io.ReadFull(reader, payload); err != nil {
+		t.Fatalf("read METRICS payload: %v", err)
+	}
+	if suffix := string(payload[length:]); suffix != "\r\n" {
+		t.Fatalf("METRICS suffix = %q, want CRLF", suffix)
+	}
+	for _, want := range []string{
+		"regiondb_commands_total 1\n",
+		"regiondb_connections 1\n",
+		"regiondb_auth_sources 0\n",
+		"regiondb_command_duration_seconds_bucket{le=\"+Inf\"} 1\n",
+	} {
+		if !strings.Contains(string(payload[:length]), want) {
+			t.Fatalf("METRICS payload does not contain %q:\n%s", want, payload[:length])
+		}
+	}
 }
 
 func testIntegrationTCPConditionalChunks(t *testing.T) {
