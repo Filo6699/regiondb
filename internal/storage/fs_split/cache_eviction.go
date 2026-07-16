@@ -1,5 +1,7 @@
 package fs_split
 
+const cacheMaintenanceQueueSize = 16
+
 type evictionRing struct {
 	front  *cacheEntry
 	back   *cacheEntry

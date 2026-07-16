@@ -1433,6 +1433,54 @@ func TestStoreCacheEvictionSkipsLowValueWALCheckpoint(t *testing.T) {
 	}
 }
 
+func TestStoreContinuesAfterTransientEvictionMaintenanceError(t *testing.T) {
+	t.Parallel()
+
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 3})
+	store := mustOpenWithOptions(t, testTempDir(t), g, Options{MaxLoadedChunks: 1})
+	maintenanceErr := errors.New("transient maintenance failure")
+	reported := make(chan error, 1)
+	store.cache.mu.Lock()
+	store.cache.maintain = func(geometry.Coord) error {
+		return maintenanceErr
+	}
+	store.cache.report = func(err error) {
+		reported <- err
+	}
+	store.cache.mu.Unlock()
+
+	first := geometry.Coord{X: 1}
+	second := geometry.Coord{X: 2}
+	third := geometry.Coord{X: 3}
+	for index, coord := range []geometry.Coord{first, second} {
+		chunk := mustChunk(t, g)
+		if err := chunk.Set(geometry.Offset{}, uint64(index+1)); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.WriteChunk(coord, chunk); err != nil {
+			t.Fatalf("WriteChunk(%v): %v", coord, err)
+		}
+	}
+	if err := <-reported; !errors.Is(err, maintenanceErr) {
+		t.Fatalf("reported maintenance error = %v, want %v", err, maintenanceErr)
+	}
+
+	chunk := mustChunk(t, g)
+	if err := chunk.Set(geometry.Offset{}, 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteChunk(third, chunk); err != nil {
+		t.Fatalf("WriteChunk() after maintenance error: %v", err)
+	}
+	stored, err := store.ReadChunk(third)
+	if err != nil {
+		t.Fatalf("ReadChunk() after maintenance error: %v", err)
+	}
+	if value, err := stored.Get(geometry.Offset{}); err != nil || value != 3 {
+		t.Fatalf("stored value after maintenance error = %d, %v, want 3", value, err)
+	}
+}
+
 func TestStoreRuntimeStats(t *testing.T) {
 	t.Parallel()
 

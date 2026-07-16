@@ -158,13 +158,15 @@ func openStore(
 		if !info.IsDir() {
 			return nil, errors.New("open read-only data directory: path is not a directory")
 		}
-		return &Store{
+		store := &Store{
 			root:        absoluteRoot,
 			geometry:    g,
 			options:     options,
 			cache:       newChunkCache(g, options.MaxLoadedChunks),
 			pendingSync: newDurabilitySyncSet(),
-		}, nil
+		}
+		store.cache.startMaintenance()
+		return store, nil
 	}
 	if err := os.MkdirAll(absoluteRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create data directory: %w", err)
@@ -244,6 +246,7 @@ func openStore(
 		}
 		return nil, fmt.Errorf("finish recovered snapshot generation: %w", err)
 	}
+	store.cache.startMaintenance()
 	return store, nil
 }
 
@@ -277,6 +280,7 @@ func (s *Store) Close() error {
 		return nil
 	}
 	s.closed = true
+	s.cache.close()
 	var result error
 	if s.walHandles != nil {
 		// The pending tail has to be flushed before the handle is released:

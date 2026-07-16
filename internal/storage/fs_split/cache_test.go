@@ -3,7 +3,9 @@ package fs_split
 import (
 	"bytes"
 	"errors"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Filo6699/regiondb/internal/geometry"
@@ -262,6 +264,111 @@ func TestChunkCacheEvictsLeastRecentlyUsedEntry(t *testing.T) {
 		if found != wantResident {
 			t.Fatalf("get(%v) found = %t, want %t", coord, found, wantResident)
 		}
+	}
+}
+
+func TestChunkCacheSecondChanceProtectsRecentlyUsedCandidate(t *testing.T) {
+	t.Parallel()
+
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 8})
+	cache := newChunkCache(g, 3)
+	coords := []geometry.Coord{{X: 1}, {X: 2}, {X: 3}, {X: 4}}
+	for index := range 2 {
+		if err := cache.put(coords[index], cachePayload(t, g, index)); err != nil {
+			t.Fatalf("put(%v): %v", coords[index], err)
+		}
+	}
+	if _, found, err := cache.get(coords[0]); err != nil || !found {
+		t.Fatalf("get(%v) = (found %t, %v)", coords[0], found, err)
+	}
+	if err := cache.put(coords[2], cachePayload(t, g, 2)); err != nil {
+		t.Fatalf("put(%v): %v", coords[2], err)
+	}
+	if _, found, err := cache.get(coords[1]); err != nil || !found {
+		t.Fatalf("get(%v) = (found %t, %v)", coords[1], found, err)
+	}
+
+	// The first coordinate is now the LRU candidate, but its reference bit
+	// gives it one second chance. The next unreferenced candidate is evicted.
+	if err := cache.put(coords[3], cachePayload(t, g, 3)); err != nil {
+		t.Fatalf("put(%v): %v", coords[3], err)
+	}
+	for coord, wantResident := range map[geometry.Coord]bool{
+		coords[0]: true,
+		coords[1]: true,
+		coords[2]: false,
+		coords[3]: true,
+	} {
+		if _, found, err := cache.get(coord); err != nil || found != wantResident {
+			t.Fatalf("get(%v) = (found %t, %v), want found %t", coord, found, err, wantResident)
+		}
+	}
+}
+
+func TestChunkCacheMaintenanceQueueFallsBackInlineAndDrains(t *testing.T) {
+	t.Parallel()
+
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 8})
+	cache := newChunkCache(g, 1)
+	firstTask := make(chan struct{})
+	releaseFirstTask := make(chan struct{})
+	var calls atomic.Int64
+	cache.maintain = func(geometry.Coord) error {
+		if calls.Add(1) == 1 {
+			close(firstTask)
+			<-releaseFirstTask
+		}
+		return nil
+	}
+	cache.startMaintenance()
+
+	if err := cache.put(geometry.Coord{}, cachePayload(t, g, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.put(geometry.Coord{X: 1}, cachePayload(t, g, 1)); err != nil {
+		t.Fatal(err)
+	}
+	<-firstTask
+	for index := 2; index <= cacheMaintenanceQueueSize+2; index++ {
+		if err := cache.put(
+			geometry.Coord{X: int64(index)},
+			cachePayload(t, g, index),
+		); err != nil {
+			t.Fatalf("put(%d): %v", index, err)
+		}
+	}
+	if queued := len(cache.maintenance); queued != cacheMaintenanceQueueSize {
+		t.Fatalf("queued maintenance tasks = %d, want %d", queued, cacheMaintenanceQueueSize)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("started maintenance calls = %d, want worker plus inline fallback", got)
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		cache.close()
+		close(closed)
+	}()
+	for {
+		cache.mu.Lock()
+		closing := cache.closed
+		cache.mu.Unlock()
+		if closing {
+			break
+		}
+		runtime.Gosched()
+	}
+	select {
+	case <-closed:
+		t.Fatal("cache close returned before queued maintenance drained")
+	default:
+	}
+	close(releaseFirstTask)
+	<-closed
+
+	const wantCalls = cacheMaintenanceQueueSize + 2
+	if got := calls.Load(); got != wantCalls {
+		t.Fatalf("maintenance calls after close = %d, want %d", got, wantCalls)
 	}
 }
 
