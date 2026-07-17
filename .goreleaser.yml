@@ -24,10 +24,25 @@ builds:
       - -trimpath
     ldflags:
       - -s -w -X main.version={{ .Version }}
+  - id: regiondb-verify
+    main: ./cmd/regiondb-verify
+    binary: regiondb-verify
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
 
 archives:
   - ids:
       - regiondb
+      - regiondb-verify
     formats:
       - tar.gz
     format_overrides:
