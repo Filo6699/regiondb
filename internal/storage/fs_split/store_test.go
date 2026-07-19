@@ -1010,8 +1010,6 @@ func TestStoreWALReplayInvalidatesReloadedChunk(t *testing.T) {
 }
 
 func TestStoreLongWALCheckpointReopenCycles(t *testing.T) {
-	t.Parallel()
-
 	const (
 		checkpointRecords = 257
 		cycles            = 4

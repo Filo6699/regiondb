@@ -129,6 +129,7 @@ func (s *Store) appendWALRecord(encoded []byte, coord geometry.Coord, payload, p
 	if cap(encoded) < recordBytes {
 		encoded = make([]byte, 0, recordBytes)
 	}
+	recordStart := len(encoded)
 	encoded = append(encoded, walMagic...)
 	encoded = bitcodec.AppendUint32(encoded, config.ChunkEdge)
 	encoded = bitcodec.AppendUint32(encoded, config.LargeChunkEdge)
@@ -137,7 +138,7 @@ func (s *Store) appendWALRecord(encoded []byte, coord geometry.Coord, payload, p
 	encoded = bitcodec.AppendUint64(encoded, uint64(coord.Y))
 	encoded = append(encoded, payload...)
 	encoded = append(encoded, presence...)
-	return bitcodec.AppendUint32(encoded, crc32.ChecksumIEEE(encoded))
+	return bitcodec.AppendUint32(encoded, crc32.ChecksumIEEE(encoded[recordStart:]))
 }
 
 func (s *Store) decodeWALRecord(encoded []byte) (walRecord, error) {
