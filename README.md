@@ -44,6 +44,11 @@ directory and geometry have no defaults and must be provided explicitly.
 Run `regiondb -help` for the complete option list. A non-loopback listener
 emits a warning without logging token or token-file contents.
 
+Checkpoint images are uncompressed by default. Use
+`-checkpoint-compression=zrle` to compress zero-heavy payload and presence
+state when the encoded image is smaller. This does not change protocol payloads
+or the steady-state durability mode.
+
 To enable TLS, provide both files from a PEM certificate/key pair:
 
 ```sh
@@ -85,7 +90,35 @@ The current contracts are documented in:
 - [Release notes](docs/releases/v1.0.0.md)
 
 `v1.0.0` is the stable release line. Its declared on-disk readability, wire
-protocol, durability, and CLI surfaces follow SemVer.
+protocol, durability, and CLI surfaces follow SemVer. The v1.1 contract adds
+bounded world reads, persisted chunk versions and conditional commits, an
+explicit global durability barrier, compressed checkpoint images, bounded
+metrics and maintenance, and read-only verification without weakening the
+v1.0 contracts.
+
+## World and conditional operations
+
+Protocol version 1 includes deterministic paginated `CHUNKSCAN`, bounded
+`CHUNKRANGE` and `CHUNKRADIUS`, compressed `CHUNKBINC` reads, and persisted
+`CHUNKVER` values. `CHUNKCAS` updates one expected version; `CHUNKBATCH`
+validates distinct chunks and commits the complete conditional batch or none
+of it. `MSET` remains an ordered sequence with applied-prefix semantics, not a
+transaction. `WALFLUSH` provides an explicit recoverability barrier for every
+write acknowledged before it.
+
+To inspect an offline `fs_split_v1` directory without modifying it:
+
+```sh
+regiondb-verify \
+  -data-dir ./data \
+  -chunk-edge 16 \
+  -large-chunk-edge 8 \
+  -block-bits 5
+```
+
+The verifier emits newline-delimited JSON. Exit code 0 means clean, 1 means
+integrity issues were found, and 2 means the scan could not complete. It does
+not repair or replay data.
 
 ## Scenario benchmarks
 

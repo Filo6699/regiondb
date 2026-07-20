@@ -2,6 +2,52 @@
 
 All notable changes to regiondb are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Deterministic paginated `CHUNKSCAN` plus bounded `CHUNKRANGE` and
+  `CHUNKRADIUS` world reads, with checked coordinates, 256-chunk limits, and a
+  64 MiB encoded response cap.
+- Persisted chunk versions, single-chunk compare-and-swap, and atomic
+  conditional multi-chunk commit decisions with crash-recoverable intents.
+- `WALFLUSH` as a global recoverability barrier across all steady-state
+  durability modes, plus stable snapshot generations for concurrent read-only
+  loads.
+- Optional ZRLE for checkpoint images and `CHUNKBINC` responses, Prometheus
+  metrics with fixed cardinality, and the read-only `regiondb-verify` integrity
+  scanner.
+
+### Changed
+
+- Write acknowledgement now follows the recoverable WAL commit decision;
+  committed chunk/version publication failures are completed by retry or
+  recovery instead of being reported as unapplied writes.
+- The bounded chunk cache uses recency with second chances, guaranteed
+  least-recent fallback under full read contention, a bounded maintenance
+  queue, inline backpressure, and deterministic drain on shutdown.
+- Authentication source tracking is bounded and groups IPv6 clients by `/64`;
+  checkpoint collection removes empty chunk images while retaining their
+  versions.
+
+### Compatibility and limitations
+
+- Existing `RGDBSPL1`, `RGDBSPL2`, `RGDBWAL1`, and `RGDBWAL2` data remains
+  readable. `RGDBSPL3` checkpoint images and version/generation/intent metadata
+  are forward additions; opening newer data with an older binary is not
+  promised.
+- `MSET` continues to apply its successful prefix before an error.
+  `CHUNKBATCH` has one atomic commit decision, but separate reads and commands
+  do not form a multi-chunk snapshot.
+- Chunk images and WAL records retain one whole-artifact CRC-32 without an
+  independently verifiable header CRC. CRC-32 detects corruption but is not
+  cryptographic authentication.
+- The verifier reports a retained version without its checkpoint-collected
+  empty image as `image_missing`; v1.1 has no metadata that distinguishes that
+  intentional state from accidental image loss.
+- `fs_region_v1` remains experimental, opt-in, unavailable to the server and
+  verifier, and outside durability, migration, and compatibility guarantees.
+
 ## [1.0.0] - 2026-06-25
 
 ### Added
@@ -105,6 +151,7 @@ interface, and Go API are not stable compatibility commitments.
 This is an engineering alpha. Its wire protocol, on-disk format, command-line
 interface, and Go API are not stable compatibility commitments.
 
+[Unreleased]: https://github.com/Filo6699/regiondb/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/Filo6699/regiondb/releases/tag/v1.0.0
 [0.1.1-preview]: https://github.com/Filo6699/regiondb/releases/tag/v0.1.1-preview
 [0.1.1-alpha]: https://github.com/Filo6699/regiondb/releases/tag/v0.1.1-alpha

@@ -15,8 +15,11 @@ separate absolute deadline bounds the complete frame; receiving additional
 bytes does not extend it. Response draining has its own absolute deadline.
 Connections retain independent authentication and close state.
 Authentication failure accounting is shared by source address across
-connections. Its entries are removed after successful authentication. The
-table currently has no hard entry-count limit.
+connections. IPv4 addresses are tracked individually and IPv6 addresses by
+masked `/64` prefix. Its recency table is bounded to 4,096 sources, removes an
+entry after successful authentication, and evicts the least-recent inactive
+source when full. An active ban is not evicted; if every slot is actively
+banned, a new source still receives the configured delay but is not retained.
 
 Cancelling the server context closes the listener plus active and queued
 connections, then waits for all workers to return. Workers, queue capacity,
@@ -34,10 +37,14 @@ warnings.
 The protocol engine uses one read/write mutex for all commands sharing that
 engine:
 
-- `GET`, `EXISTS`, `CHUNK`, `CHUNKBIN`, and `CHUNKEXISTS`, including exact
-  `STATE` reads, hold a shared read lock;
-- `SET`, `UNSET`, and both `CHUNKSET` forms hold an exclusive write lock across
-  read-modify-write or one complete chunk write.
+- `GET`, `EXISTS`, `CHUNK`, `CHUNKBIN`, `CHUNKBINC`, `CHUNKEXISTS`,
+  `CHUNKVER`, `CHUNKSCAN`, `CHUNKRANGE`, and `CHUNKRADIUS`, including exact
+  `STATE` reads, hold a shared read lock while loading their result;
+- `SET`, `UNSET`, both `CHUNKSET` forms, `CHUNKCAS`, `CHUNKBATCH`, and
+  `WALFLUSH` hold an exclusive write lock across their storage operation;
+- `MGET` performs its shared-locked single-item reads in argument order, and
+  `MSET` performs its exclusive-locked single-item writes in argument order.
+  Neither holds one lock across the entire request.
 
 The `fs_split_v1` store also protects its methods with a store-wide read/write
 mutex. Reads may overlap other reads. A write excludes reads and other writes
@@ -45,6 +52,19 @@ for that store instance. Its LRU cache has a separate mutex and retains at
 most `max_loaded_chunks`; chunks returned to callers are copies.
 
 These locks prevent in-process races and lost updates through one engine.
+`CHUNKBATCH` validates every distinct coordinate and expected version while
+holding the exclusive store lock, then publishes one recoverable commit
+decision. Its returned versions are consecutive in request order. Ordinary
+commands and `MSET` do not inherit that multi-chunk atomicity.
+
+The cache orders entries by recency and gives a touched entry one second
+chance. Admission scans from the least-recent end. If concurrent reads touched
+every resident between admissions, a complete scan clears their chances and
+the least-recent entry is evicted as the rare contention fallback; eviction
+therefore always progresses and never exceeds the configured resident bound.
+Eviction maintenance has one worker and a queue of 16. A full queue runs the
+task inline, and close drains the queue before returning. Maintenance errors
+are reported but do not abort the write-through store.
 
 ## Process ownership
 
@@ -79,11 +99,22 @@ window prevents immediate reuse of an owner record after an abnormal lifecycle.
 Read-only store instances do not acquire writer ownership, create a missing
 data directory, open the WAL, or replay recovery. Any number of them may run
 beside the writer. Each read opens the current atomically published chunk file
-rather than retaining a process-local chunk cache. This gives a complete
-single-chunk image, but not a multi-chunk snapshot: separate reads may observe
-different points in the writer's sequence, and data present only in an
-unreplayed WAL is not visible. Writes through a read-only instance fail.
+rather than retaining a process-local chunk cache. It reads the persisted
+snapshot generation before and after the file and accepts the result only when
+both values are the same even generation. An odd generation reports active
+publication; a changed generation reports read contention. This gives a
+complete stable single-file load, but not a multi-chunk snapshot: separate
+reads may observe different committed generations, and data present only in an
+unreplayed WAL is not visible. Callers may retry these rare contention errors.
+Writes through a read-only instance fail.
 
-The server and benchmark commands currently open writer instances; there is no
-read-only command-line mode. There is also no transaction, snapshot, or
-ordering guarantee across multiple commands.
+The data-directory-wide version clock and per-chunk version files participate
+in the same generation protocol. A writer marks publication unstable before a
+mutation or recovery sequence and restores an even generation only after
+committed chunk/version publication. Overflow of either the version clock or
+snapshot generation fails closed rather than wrapping.
+
+The server and benchmark commands currently open writer instances;
+`regiondb-verify` is read-only but is a diagnostic scan rather than a server
+mode. There is no transaction, snapshot, or ordering guarantee across multiple
+commands.

@@ -13,6 +13,13 @@ migration path. Production data directories keep using `fs_split_v1`.
 in this release line. Benchmark results for it do not establish support,
 durability, migration, or compatibility guarantees.
 
+The v1.1 world-read, persisted-version, conditional-mutation, global
+`WALFLUSH`, snapshot-generation, checkpoint-compression, background
+maintenance, metrics, and verifier contracts apply to `fs_split_v1` only.
+Matching method names or benchmark results do not extend those guarantees to
+`fs_region_v1`. In particular, the experimental layout cannot serve the
+versioned protocol engine and is not accepted by `regiondb-verify`.
+
 This document uses regular chunk, large chunk, and chunk coordinate as defined
 by the [project terminology](TERMINOLOGY.md).
 
@@ -91,3 +98,8 @@ measured against; they are not proposed guarantees.
 The store keeps a bounded number of region images open and closes the least
 recently used image when that bound is reached. Handle state is neither stored
 in the image directory nor part of the format.
+
+There is no in-place conversion between backends. Evaluations must use separate
+data directories populated from an external source of truth. Rollback means
+stopping the experiment and reopening the unchanged `fs_split_v1` directory,
+not pointing the production server at region images.
