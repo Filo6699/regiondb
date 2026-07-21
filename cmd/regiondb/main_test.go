@@ -24,6 +24,7 @@ import (
 	"github.com/Filo6699/regiondb/internal/protocol"
 	"github.com/Filo6699/regiondb/internal/server"
 	"github.com/Filo6699/regiondb/internal/storage/fs_split"
+	"github.com/Filo6699/regiondb/internal/version"
 )
 
 func TestPrintVersion(t *testing.T) {
@@ -33,9 +34,29 @@ func TestPrintVersion(t *testing.T) {
 		t.Fatalf("printVersion() error = %v", err)
 	}
 
-	const want = "regiondb dev\n"
+	const want = "regiondb 1.1.0\n"
 	if got := output.String(); got != want {
 		t.Fatalf("printVersion() = %q, want %q", got, want)
+	}
+}
+
+func TestReleaseVersionMetadataUsesProjectVersion(t *testing.T) {
+	const wantVersion = "1.1.0"
+	if version.Current != wantVersion {
+		t.Fatalf("version.Current = %q, want %q", version.Current, wantVersion)
+	}
+
+	config, err := os.ReadFile(filepath.Join("..", "..", ".goreleaser.yml"))
+	if err != nil {
+		t.Fatalf("read GoReleaser config: %v", err)
+	}
+	for _, want := range []string{
+		"-X github.com/Filo6699/regiondb/internal/version.Current={{ .Version }}",
+		"{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}",
+	} {
+		if !bytes.Contains(config, []byte(want)) {
+			t.Fatalf(".goreleaser.yml does not derive release metadata from the project version: missing %q", want)
+		}
 	}
 }
 
@@ -533,7 +554,7 @@ func TestRunVersion(t *testing.T) {
 	if err := run(context.Background(), []string{"-version"}, &stdout, ioDiscard{}); err != nil {
 		t.Fatalf("run(-version) error = %v", err)
 	}
-	if got := stdout.String(); !strings.Contains(got, version) {
+	if got := stdout.String(); !strings.Contains(got, version.Current) {
 		t.Fatalf("run(-version) output = %q", got)
 	}
 }

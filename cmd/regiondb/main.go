@@ -22,9 +22,8 @@ import (
 	"github.com/Filo6699/regiondb/internal/protocol"
 	"github.com/Filo6699/regiondb/internal/server"
 	"github.com/Filo6699/regiondb/internal/storage/fs_split"
+	"github.com/Filo6699/regiondb/internal/version"
 )
-
-var version = "dev"
 
 func main() {
 	ctx, stop := notifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -76,7 +75,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnEr
 		return printVersion(stdout)
 	}
 	logger := logging.New(stderr)
-	logger.Info("process", "starting", slog.String("version", version))
+	logger.Info("process", "starting", slog.String("version", version.Current))
 
 	requestedWALStreams := config.maxOpenWALStreams
 	requestedAcceptQueue := config.acceptQueue
@@ -487,6 +486,6 @@ func validateAuthenticationToken(token string) error {
 }
 
 func printVersion(w io.Writer) error {
-	_, err := io.WriteString(w, "regiondb "+version+"\n")
+	_, err := io.WriteString(w, "regiondb "+version.Current+"\n")
 	return err
 }

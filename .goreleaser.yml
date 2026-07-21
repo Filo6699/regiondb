@@ -23,7 +23,7 @@ builds:
     flags:
       - -trimpath
     ldflags:
-      - -s -w -X main.version={{ .Version }}
+      - -s -w -X github.com/Filo6699/regiondb/internal/version.Current={{ .Version }}
   - id: regiondb-verify
     main: ./cmd/regiondb-verify
     binary: regiondb-verify
