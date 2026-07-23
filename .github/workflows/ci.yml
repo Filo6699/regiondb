@@ -137,13 +137,51 @@ jobs:
       - name: Build image
         run: docker build --tag regiondb:health-smoke .
 
-      - name: Start image without a token
-        run: docker run --detach --name regiondb-health-smoke regiondb:health-smoke
-
-      - name: Wait for healthy status
+      - name: Inspect image credentials
         shell: bash
         run: |
           set -euo pipefail
+          if docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' \
+            regiondb:health-smoke | grep -q '^REGIONDB_TOKEN='; then
+            echo "image config contains REGIONDB_TOKEN" >&2
+            exit 1
+          fi
+
+      - name: Inspect Compose loopback publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(openssl rand -hex 32)"
+          binding="$(
+            REGIONDB_TOKEN="$token" docker compose config --format json |
+              jq -r '.services.regiondb.ports[0].host_ip'
+          )"
+          test "$binding" = "127.0.0.1"
+
+      - name: Reject missing credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          timeout 10s docker run --rm regiondb:health-smoke
+          status="$?"
+          set -e
+          if [[ "$status" == "0" ]]; then
+            echo "image started without explicit authentication configuration" >&2
+            exit 1
+          fi
+          if [[ "$status" == "124" ]]; then
+            echo "image remained running without explicit authentication configuration" >&2
+            exit 1
+          fi
+
+      - name: Start image and wait for authenticated readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(openssl rand -hex 32)"
+          docker run --detach --name regiondb-health-smoke \
+            --env REGIONDB_TOKEN="$token" regiondb:health-smoke
           trap 'docker logs regiondb-health-smoke; docker rm --force regiondb-health-smoke' EXIT
           for attempt in {1..30}; do
             status="$(docker inspect --format '{{.State.Health.Status}}' regiondb-health-smoke)"

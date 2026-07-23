@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Filo6699/regiondb/internal/bitcodec"
 )
@@ -72,16 +73,95 @@ func (s *Store) intentPath() string {
 	return filepath.Join(s.root, intentDirectoryName, intentFileName)
 }
 
-func (s *Store) publishIntent(state intentState, walBoundary uint64) error {
-	directory := filepath.Join(s.root, intentDirectoryName)
-	created := false
-	if _, err := os.Stat(directory); errors.Is(err, os.ErrNotExist) {
-		created = true
-	} else if err != nil {
-		return fmt.Errorf("inspect intent directory: %w", err)
+func safeIntentPaths(root string) (string, string, error) {
+	directory, err := containedControlPath(root, intentDirectoryName)
+	if err != nil {
+		return "", "", fmt.Errorf("%w: intent directory: %v", ErrCorruptIntent, err)
 	}
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return fmt.Errorf("create intent directory: %w", err)
+	path, err := containedControlPath(directory, intentFileName)
+	if err != nil {
+		return "", "", fmt.Errorf("%w: intent file: %v", ErrCorruptIntent, err)
+	}
+	return directory, path, nil
+}
+
+func containedControlPath(root string, component string) (string, error) {
+	if component == "" ||
+		component == "." ||
+		component == ".." ||
+		filepath.Base(component) != component ||
+		strings.ContainsAny(component, `/\`) {
+		return "", errors.New("unsafe path component")
+	}
+	for _, character := range []byte(component) {
+		if (character < 'a' || character > 'z') &&
+			(character < '0' || character > '9') &&
+			character != '.' &&
+			character != '-' &&
+			character != '_' {
+			return "", errors.New("path component is outside the control-file grammar")
+		}
+	}
+	cleanRoot := filepath.Clean(root)
+	path := filepath.Join(cleanRoot, component)
+	relative, err := filepath.Rel(cleanRoot, path)
+	if err != nil {
+		return "", fmt.Errorf("resolve relative path: %w", err)
+	}
+	if filepath.IsAbs(relative) ||
+		relative == ".." ||
+		strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", errors.New("path escapes its root")
+	}
+	return path, nil
+}
+
+func (s *Store) inspectIntentDirectory(create bool) (string, string, bool, error) {
+	directory, path, err := safeIntentPaths(s.root)
+	if err != nil {
+		return "", "", false, err
+	}
+	info, err := os.Lstat(directory)
+	if errors.Is(err, os.ErrNotExist) {
+		if !create {
+			return directory, path, false, nil
+		}
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			return "", "", false, fmt.Errorf("create intent directory: %w", err)
+		}
+		return directory, path, true, nil
+	}
+	if err != nil {
+		return "", "", false, fmt.Errorf("inspect intent directory: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return "", "", false, fmt.Errorf("%w: intent directory is not a real directory", ErrCorruptIntent)
+	}
+	return directory, path, false, nil
+}
+
+func (s *Store) intentExists() (bool, error) {
+	_, path, _, err := s.inspectIntentDirectory(false)
+	if err != nil {
+		return false, err
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect intent: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return false, fmt.Errorf("%w: intent is not a regular file", ErrCorruptIntent)
+	}
+	return true, nil
+}
+
+func (s *Store) publishIntent(state intentState, walBoundary uint64) error {
+	_, path, created, err := s.inspectIntentDirectory(true)
+	if err != nil {
+		return err
 	}
 	if created {
 		if err := commitDirectoryEntry(
@@ -98,7 +178,7 @@ func (s *Store) publishIntent(state intentState, walBoundary uint64) error {
 	if err := s.runIntentFailpoint(before); err != nil {
 		return err
 	}
-	if err := writeAtomic(s.intentPath(), encodeIntent(state, walBoundary), true, nil); err != nil {
+	if err := writeAtomic(path, encodeIntent(state, walBoundary), true, nil); err != nil {
 		return fmt.Errorf("publish intent: %w", err)
 	}
 	boundary := intentRollbackPublished
@@ -112,7 +192,11 @@ func (s *Store) clearIntent() error {
 	if err := s.runIntentFailpoint(intentBeforeClear); err != nil {
 		return err
 	}
-	if err := os.Remove(s.intentPath()); err != nil {
+	_, path, _, err := s.inspectIntentDirectory(false)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil {
 		return fmt.Errorf("remove intent: %w", err)
 	}
 	if err := s.runIntentFailpoint(intentAfterClear); err != nil {
@@ -125,14 +209,22 @@ func (s *Store) clearIntent() error {
 }
 
 func (s *Store) syncIntentDirectory() error {
+	directory, _, _, err := s.inspectIntentDirectory(false)
+	if err != nil {
+		return err
+	}
 	return commitDirectoryEntry(
-		syncParentDirectory(filepath.Dir(s.intentPath())),
+		syncParentDirectory(directory),
 		replaceCommitsDirectoryEntry,
 	)
 }
 
 func (s *Store) recoverConditionalIntent() error {
-	entries, err := os.ReadDir(filepath.Join(s.root, intentDirectoryName))
+	directory, _, _, err := s.inspectIntentDirectory(false)
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(directory)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -140,7 +232,7 @@ func (s *Store) recoverConditionalIntent() error {
 		return fmt.Errorf("inspect intent directory: %w", err)
 	}
 	for _, entry := range entries {
-		if entry.Name() != intentFileName || entry.IsDir() {
+		if entry.Name() != intentFileName || !entry.Type().IsRegular() {
 			return fmt.Errorf("%w: unexpected artifact %q", ErrCorruptIntent, entry.Name())
 		}
 	}
@@ -163,7 +255,18 @@ func (s *Store) recoverConditionalIntent() error {
 }
 
 func (s *Store) readIntent() (intentState, uint64, error) {
-	encoded, err := os.ReadFile(s.intentPath())
+	exists, err := s.intentExists()
+	if err != nil {
+		return 0, 0, err
+	}
+	if !exists {
+		return 0, 0, fmt.Errorf("read intent: %w", os.ErrNotExist)
+	}
+	_, path, err := safeIntentPaths(s.root)
+	if err != nil {
+		return 0, 0, err
+	}
+	encoded, err := os.ReadFile(path)
 	if err != nil {
 		return 0, 0, fmt.Errorf("read intent: %w", err)
 	}

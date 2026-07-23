@@ -1,6 +1,7 @@
 package fs_split
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"os/exec"
@@ -203,6 +204,64 @@ func TestIntentCorruptionFailsClosed(t *testing.T) {
 	}
 	if _, err := OpenWithOptions(root, g, walRestartCrashOptions()); !errors.Is(err, ErrCorruptIntent) {
 		t.Fatalf("OpenWithOptions() error = %v, want ErrCorruptIntent", err)
+	}
+}
+
+func TestIntentControlPathRejectsTraversalAndUnsafeGrammar(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	for _, component := range []string{
+		"",
+		".",
+		"..",
+		"../escape",
+		`..\escape`,
+		"/absolute",
+		"contains space",
+		"UPPERCASE",
+	} {
+		if path, err := containedControlPath(root, component); err == nil {
+			t.Fatalf("containedControlPath(%q) = %q, want error", component, path)
+		}
+	}
+	for _, component := range []string{intentDirectoryName, intentFileName} {
+		path, err := containedControlPath(root, component)
+		if err != nil {
+			t.Fatalf("containedControlPath(%q): %v", component, err)
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if relative != component {
+			t.Fatalf("relative path = %q, want %q", relative, component)
+		}
+	}
+}
+
+func TestIntentDirectorySymlinkFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	outside := t.TempDir()
+	target := filepath.Join(outside, intentFileName)
+	if err := os.WriteFile(target, encodeIntent(intentCommitted, 0), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, intentDirectoryName)); err != nil {
+		t.Skipf("create intent-directory symlink: %v", err)
+	}
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 1, BlockBits: 1})
+	if _, err := OpenWithOptions(root, g, walRestartCrashOptions()); !errors.Is(err, ErrCorruptIntent) {
+		t.Fatalf("OpenWithOptions() error = %v, want ErrCorruptIntent", err)
+	}
+	contents, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(contents, encodeIntent(intentCommitted, 0)) {
+		t.Fatal("intent symlink target was modified")
 	}
 }
 

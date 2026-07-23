@@ -43,6 +43,7 @@ type config struct {
 	dataDir               string
 	token                 string
 	tokenFile             string
+	tokenSource           string
 	noAuth                bool
 	tlsCert               string
 	tlsKey                string
@@ -76,6 +77,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnEr
 	}
 	logger := logging.New(stderr)
 	logger.Info("process", "starting", slog.String("version", version.Current))
+	logger.Info("authentication", "configured",
+		slog.String("token_source", config.tokenSource),
+	)
 
 	requestedWALStreams := config.maxOpenWALStreams
 	requestedAcceptQueue := config.acceptQueue
@@ -447,16 +451,22 @@ func resolveAuthentication(result *config, provided map[string]bool) error {
 			return errors.New("-no-auth cannot be combined with -token or -token-file")
 		}
 		result.token = ""
+		result.tokenSource = "disabled"
 		return nil
 	}
 	if provided["token"] {
-		return validateAuthenticationToken(result.token)
+		if err := validateAuthenticationToken(result.token); err != nil {
+			return err
+		}
+		result.tokenSource = "command_line"
+		return nil
 	}
 	if token, ok := os.LookupEnv("REGIONDB_TOKEN"); ok {
 		if err := validateAuthenticationToken(token); err != nil {
 			return fmt.Errorf("invalid REGIONDB_TOKEN: %w", err)
 		}
 		result.token = token
+		result.tokenSource = "environment"
 		return nil
 	}
 	if result.tokenFile != "" {
@@ -468,6 +478,7 @@ func resolveAuthentication(result *config, provided map[string]bool) error {
 		if err := validateAuthenticationToken(result.token); err != nil {
 			return fmt.Errorf("invalid authentication token file: %w", err)
 		}
+		result.tokenSource = "file"
 		return nil
 	}
 	return errors.New("authentication requires -token, REGIONDB_TOKEN, -token-file, or explicit -no-auth")

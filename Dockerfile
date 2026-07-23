@@ -24,7 +24,7 @@ EXPOSE 4242
 VOLUME ["/var/lib/regiondb"]
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
-    CMD nc -z -w 2 127.0.0.1 4242
+    CMD ["/usr/local/bin/docker-entrypoint.sh", "healthcheck"]
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["-listen", "0.0.0.0:4242", "-data-dir", "/var/lib/regiondb", "-chunk-edge", "16", "-large-chunk-edge", "8", "-block-bits", "5"]

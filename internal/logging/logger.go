@@ -79,6 +79,9 @@ func (l *Logger) log(level slog.Level, component, event string, attributes []slo
 
 func sensitiveKey(key string) bool {
 	key = strings.ToLower(key)
+	if key == "token_source" {
+		return false
+	}
 	return strings.Contains(key, "token") ||
 		strings.Contains(key, "password") ||
 		strings.Contains(key, "secret") ||

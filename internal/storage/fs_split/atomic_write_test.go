@@ -89,6 +89,52 @@ func TestAtomicWriteFailpointCleansTemporaryFile(t *testing.T) {
 	assertNoChunkTemporaryFiles(t, root)
 }
 
+func TestTemporaryFileCreationIsExclusive(t *testing.T) {
+	t.Parallel()
+
+	root := testTempDir(t)
+	firstName := chunkTemporaryPrefix + "00000000000000000000000000000000"
+	firstPath := filepath.Join(root, firstName)
+	if err := os.WriteFile(firstPath, []byte("existing"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	random := append(make([]byte, temporaryRandomBytes), bytes.Repeat([]byte{1}, temporaryRandomBytes)...)
+	file, err := createTemporaryFileWithRandom(root, chunkTemporaryPrefix, bytes.NewReader(random))
+	if err != nil {
+		t.Fatalf("createTemporaryFileWithRandom(): %v", err)
+	}
+	t.Cleanup(func() {
+		if err := file.Close(); err != nil {
+			t.Errorf("close temporary file: %v", err)
+		}
+	})
+	if file.Name() == firstPath {
+		t.Fatal("exclusive creation replaced an existing path")
+	}
+	existing, err := os.ReadFile(firstPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(existing) != "existing" {
+		t.Fatalf("existing file = %q, want unchanged content", existing)
+	}
+}
+
+func TestTemporaryFileRejectsUnsafePrefix(t *testing.T) {
+	t.Parallel()
+
+	for _, prefix := range []string{"", ".", "..", "../escape", `..\escape`, "/absolute"} {
+		if file, err := createTemporaryFileWithRandom(
+			testTempDir(t),
+			prefix,
+			bytes.NewReader(make([]byte, temporaryRandomBytes)),
+		); err == nil {
+			_ = file.Close()
+			t.Fatalf("unsafe prefix %q succeeded", prefix)
+		}
+	}
+}
+
 func TestOpenReclaimsStaleChunkTemporaryFiles(t *testing.T) {
 	t.Parallel()
 

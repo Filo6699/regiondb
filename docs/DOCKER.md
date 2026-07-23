@@ -14,15 +14,17 @@ docker compose up --build -d regiondb
 docker compose ps
 ```
 
-The Compose configuration publishes TCP port `4242`. Set `REGIONDB_PORT` to
-publish a different host port:
+The Compose configuration publishes TCP port `4242` on host loopback only.
+Set `REGIONDB_PORT` to publish a different loopback port:
 
 ```sh
 REGIONDB_PORT=14242 docker compose up --build -d regiondb
 ```
 
-The image healthcheck authenticates over the loopback TCP listener and issues
-`INFO`. It reports healthy only when both commands return valid responses.
+The image healthcheck authenticates over the container loopback TCP listener
+and issues `INFO`. It reports healthy only when both commands return valid
+responses, so an open socket that cannot serve authenticated requests is not
+ready.
 
 Stop the service without deleting its data:
 
@@ -100,5 +102,6 @@ docker run --rm \
 
 `REGIONDB_TOKEN` has no default and is never stored in the image. The container
 exits before opening the data directory or listener when it is absent or empty.
+Pass `-no-auth` explicitly only for an intentionally unauthenticated container.
 Avoid putting real tokens in image build arguments, Dockerfiles, Compose files,
 or shell history.

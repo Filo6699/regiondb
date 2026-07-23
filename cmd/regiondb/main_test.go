@@ -77,6 +77,9 @@ func TestParseConfig(t *testing.T) {
 	if got.listenAddress != defaults.Address || got.dataDir != "data" || got.token != "secret" {
 		t.Fatalf("parseConfig() strings = %+v", got)
 	}
+	if got.tokenSource != "command_line" {
+		t.Fatalf("parseConfig() token source = %q, want command_line", got.tokenSource)
+	}
 	if got.geometry.ChunkEdge != 16 || got.geometry.LargeChunkEdge != 8 || got.geometry.BlockBits != 5 {
 		t.Fatalf("parseConfig() geometry = %+v", got.geometry)
 	}
@@ -121,6 +124,9 @@ func TestParseConfigAuthenticationPrecedence(t *testing.T) {
 	if fromEnvironment.token != "env-token" {
 		t.Fatalf("environment token = %q, want env-token", fromEnvironment.token)
 	}
+	if fromEnvironment.tokenSource != "environment" {
+		t.Fatalf("environment token source = %q, want environment", fromEnvironment.tokenSource)
+	}
 
 	fromCLI, err := parseConfig(append(base, "-token", "cli-token"), ioDiscard{})
 	if err != nil {
@@ -128,6 +134,9 @@ func TestParseConfigAuthenticationPrecedence(t *testing.T) {
 	}
 	if fromCLI.token != "cli-token" {
 		t.Fatalf("CLI token = %q, want cli-token", fromCLI.token)
+	}
+	if fromCLI.tokenSource != "command_line" {
+		t.Fatalf("CLI token source = %q, want command_line", fromCLI.tokenSource)
 	}
 
 	t.Setenv("REGIONDB_TOKEN", "")
@@ -143,6 +152,9 @@ func TestParseConfigAuthenticationPrecedence(t *testing.T) {
 	}
 	if fromFile.token != "file-token" {
 		t.Fatalf("file token = %q, want file-token", fromFile.token)
+	}
+	if fromFile.tokenSource != "file" {
+		t.Fatalf("file token source = %q, want file", fromFile.tokenSource)
 	}
 }
 
@@ -162,6 +174,9 @@ func TestParseConfigExplicitNoAuth(t *testing.T) {
 	if !got.noAuth || got.token != "" {
 		t.Fatalf("no-auth config = %+v", got)
 	}
+	if got.tokenSource != "disabled" {
+		t.Fatalf("no-auth token source = %q, want disabled", got.tokenSource)
+	}
 	if _, err := parseConfig(append(base, "-token", "secret"), ioDiscard{}); err == nil {
 		t.Fatal("-no-auth with -token succeeded")
 	}
@@ -180,6 +195,31 @@ func TestAuthenticationErrorsDoNotExposeSecret(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "secret value") {
 		t.Fatalf("error exposed secret: %q", err)
+	}
+}
+
+func TestRunLogsAuthenticationSourceWithoutValue(t *testing.T) {
+	t.Setenv("REGIONDB_TOKEN", "environment-secret")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var stderr bytes.Buffer
+	err := run(ctx, []string{
+		"-listen", "127.0.0.1:0",
+		"-data-dir", t.TempDir(),
+		"-chunk-edge", "1",
+		"-large-chunk-edge", "1",
+		"-block-bits", "1",
+	}, ioDiscard{}, &stderr)
+	if err != nil {
+		t.Fatalf("run() error = %v", err)
+	}
+	logs := stderr.String()
+	if !strings.Contains(logs, "event=configured") ||
+		!strings.Contains(logs, "token_source=environment") {
+		t.Fatalf("authentication source log missing from %q", logs)
+	}
+	if strings.Contains(logs, "environment-secret") {
+		t.Fatalf("authentication log exposed token value: %q", logs)
 	}
 }
 

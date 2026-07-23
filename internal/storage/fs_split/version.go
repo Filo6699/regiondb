@@ -135,7 +135,7 @@ func (s *Store) ConditionalWriteChunks(mutations []storage.ConditionalMutation) 
 		return nil, err
 	}
 	if err := s.publishIntent(intentRollback, boundary); err != nil {
-		if _, statErr := os.Stat(s.intentPath()); statErr == nil {
+		if exists, _ := s.intentExists(); exists {
 			if clearErr := s.clearIntent(); clearErr != nil {
 				s.poisonDurability(fmt.Errorf("clean failed rollback intent publication: %w", clearErr))
 				s.finishRejectedSnapshot()

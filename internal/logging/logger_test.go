@@ -48,6 +48,7 @@ func TestLoggerOmitsSecretAndPathFields(t *testing.T) {
 	logger := New(&output)
 	logger.Error("storage", "open_failed",
 		slog.String("token", "auth-secret"),
+		slog.String("token_source", "environment"),
 		slog.String("data_dir", "/private/world"),
 		slog.String("certificate_path", "/private/server.crt"),
 		slog.String("mode", "writer"),
@@ -61,5 +62,8 @@ func TestLoggerOmitsSecretAndPathFields(t *testing.T) {
 	}
 	if !strings.Contains(got, "mode=writer") {
 		t.Fatalf("safe field missing from %q", got)
+	}
+	if !strings.Contains(got, "token_source=environment") {
+		t.Fatalf("credential source missing from %q", got)
 	}
 }

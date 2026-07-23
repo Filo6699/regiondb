@@ -5,7 +5,7 @@ services:
     environment:
       REGIONDB_TOKEN: ${REGIONDB_TOKEN:?set REGIONDB_TOKEN to a non-empty token}
     ports:
-      - "${REGIONDB_PORT:-4242}:4242"
+      - "127.0.0.1:${REGIONDB_PORT:-4242}:4242"
     volumes:
       - regiondb-data:/var/lib/regiondb
     restart: unless-stopped

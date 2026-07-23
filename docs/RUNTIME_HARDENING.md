@@ -45,6 +45,8 @@ Authentication is required unless `-no-auth` is explicit. Token precedence is
 `-token`, `REGIONDB_TOKEN`, then `-token-file`; `-no-auth` overrides an ambient
 environment token and cannot be combined with token flags. A non-loopback
 listener logs a warning without logging token values or token-file contents.
+Startup logs the selected token source (`command_line`, `environment`, `file`,
+or `disabled`) without logging the credential value.
 
 Failed authentication is tracked by source address. Each failure is delayed by
 `-auth-failure-delay` (250 milliseconds by default). After
@@ -70,6 +72,11 @@ drains it.
 descriptor clamp. At startup, regiondb reserves descriptors for the listener,
 workers, and accepted queue, then reduces the queue or WAL handle limit when
 necessary rather than exceeding the detected budget.
+
+Socket readiness is delegated to Go's network poller. regiondb does not keep a
+descriptor-indexed fixed bitmap such as `FD_SET`; the integration suite forces
+the listener and overload-response socket above descriptor 1,100 and verifies
+that the bounded `BUSY` reply remains functional.
 
 The unsynchronized publication tracker retains at most 4,096 paths. On
 overflow, `WALFLUSH` switches to a bounded-memory full data-tree walk. Files

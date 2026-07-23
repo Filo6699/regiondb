@@ -3,6 +3,7 @@
 package fs_region
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
@@ -180,6 +181,42 @@ func TestRegionImageWithoutHeaderHoldsNoChunk(t *testing.T) {
 	}
 	if got != 9 {
 		t.Fatalf("Get() = %d, want 9", got)
+	}
+}
+
+func TestRegionImageRejectsOutOfBoundsSlotBeforeWrite(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 2, BlockBits: 1})
+	layout, err := newImageLayout(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "r_p0_p0.rdbregion")
+	image, err := openRegionImage(path, geometry.Coord{}, g, layout, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := image.close(); err != nil {
+			t.Errorf("close region image: %v", err)
+		}
+	}()
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := make([]byte, int(layout.slotBytes))
+	if err := image.writeSlot(layout.slotCount, payload); err == nil {
+		t.Fatal("writeSlot() accepted an out-of-bounds slot")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("out-of-bounds slot write modified the region image")
 	}
 }
 

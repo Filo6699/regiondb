@@ -358,7 +358,7 @@ func (s *Store) commitOrdinaryChunk(coord geometry.Coord, chunk *storage.Chunk, 
 		return err
 	}
 	if err := s.publishIntent(intentRollback, boundary); err != nil {
-		if _, statErr := os.Stat(s.intentPath()); statErr == nil {
+		if exists, _ := s.intentExists(); exists {
 			if clearErr := s.clearIntent(); clearErr != nil {
 				s.poisonDurability(fmt.Errorf("clean failed rollback intent publication: %w", clearErr))
 				return errors.Join(err, s.checkDurabilityHealthy())
@@ -782,7 +782,7 @@ func (s *Store) collectEmptyChunk(coord geometry.Coord, _ bool) error {
 	}
 
 	directory := filepath.Dir(path)
-	tombstone, err := os.CreateTemp(directory, chunkTemporaryPrefix+"gc-*")
+	tombstone, err := createTemporaryFile(directory, chunkTemporaryPrefix+"gc-")
 	if err != nil {
 		return fmt.Errorf("create empty chunk tombstone: %w", err)
 	}
@@ -845,7 +845,7 @@ func writeAtomic(
 	syncData bool,
 	failpoint func(atomicWriteBoundary) error,
 ) (returnErr error) {
-	temporary, err := os.CreateTemp(filepath.Dir(path), chunkTemporaryPrefix+"*")
+	temporary, err := createTemporaryFile(filepath.Dir(path), chunkTemporaryPrefix)
 	if err != nil {
 		return fmt.Errorf("create temporary file: %w", err)
 	}

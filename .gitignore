@@ -14,3 +14,16 @@ bin/
 dist/
 coverage.out
 *.test
+
+# Local credentials and private keys
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+id_dsa
+id_ecdsa
+id_ed25519
+id_rsa

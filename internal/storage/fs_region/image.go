@@ -257,6 +257,13 @@ func (image *regionImage) readSlot(index uint64) ([]byte, error) {
 }
 
 func (image *regionImage) writeSlot(index uint64, payload []byte) error {
+	if index >= image.layout.slotCount {
+		return fmt.Errorf(
+			"write region slot: index %d is outside %d slots",
+			index,
+			image.layout.slotCount,
+		)
+	}
 	if uint64(len(payload)) != image.layout.slotBytes {
 		return fmt.Errorf(
 			"write region slot: payload is %d bytes, want %d",
