@@ -6,6 +6,7 @@ readonly repo_root
 cd "$repo_root"
 
 scripts/test/quick.sh
+scripts/test/security.sh
 go test -race ./...
 scripts/test/hardened.sh
 go test -count=1 ./...

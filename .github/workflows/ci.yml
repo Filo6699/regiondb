@@ -65,6 +65,10 @@ jobs:
           REGIONDB_TEST_JSON_OUTPUT: ${{ runner.os == 'Windows' && 'windows-test-results.json' || '' }}
         run: scripts/test/quick.sh
 
+      - name: Run security regression suite
+        if: runner.os == 'Linux'
+        run: scripts/test/security.sh
+
       - name: Repeat server integration tests
         if: runner.os == 'Linux'
         run: go test -run Integration -count=20 ./internal/server
@@ -137,15 +141,8 @@ jobs:
       - name: Build image
         run: docker build --tag regiondb:health-smoke .
 
-      - name: Inspect image credentials
-        shell: bash
-        run: |
-          set -euo pipefail
-          if docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' \
-            regiondb:health-smoke | grep -q '^REGIONDB_TOKEN='; then
-            echo "image config contains REGIONDB_TOKEN" >&2
-            exit 1
-          fi
+      - name: Run container security regressions
+        run: scripts/test/container-security.sh regiondb:health-smoke
 
       - name: Inspect Compose loopback publication
         shell: bash
@@ -157,23 +154,6 @@ jobs:
               jq -r '.services.regiondb.ports[0].host_ip'
           )"
           test "$binding" = "127.0.0.1"
-
-      - name: Reject missing credentials
-        shell: bash
-        run: |
-          set -euo pipefail
-          set +e
-          timeout 10s docker run --rm regiondb:health-smoke
-          status="$?"
-          set -e
-          if [[ "$status" == "0" ]]; then
-            echo "image started without explicit authentication configuration" >&2
-            exit 1
-          fi
-          if [[ "$status" == "124" ]]; then
-            echo "image remained running without explicit authentication configuration" >&2
-            exit 1
-          fi
 
       - name: Start image and wait for authenticated readiness
         shell: bash
