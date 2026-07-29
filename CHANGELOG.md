@@ -20,6 +20,9 @@ All notable changes to regiondb are documented in this file.
 
 ### Changed
 
+- Storage, durability, and server internals are split into focused source files
+  without protocol, on-disk format, durability, locking, or public Go API
+  changes.
 - Write acknowledgement now follows the recoverable WAL commit decision;
   committed chunk/version publication failures are completed by retry or
   recovery instead of being reported as unapplied writes.
