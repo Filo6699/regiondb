@@ -238,11 +238,13 @@ func TestStressHotContentionEvictionCycles(t *testing.T) {
 	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 2, BlockBits: 8})
 	store := mustOpenWithOptions(t, t.TempDir(), g, Options{MaxLoadedChunks: 2})
 	coords := make([]geometry.Coord, workerCount)
+	expected := make([]*expectedState, workerCount)
 	for worker := range workerCount {
 		coords[worker] = geometry.Coord{X: int64(worker), Y: int64(-worker)}
 		if err := store.WriteChunk(coords[worker], mustChunk(t, g)); err != nil {
 			t.Fatalf("initialize chunk %v: %v", coords[worker], err)
 		}
+		expected[worker] = newExpectedState(0)
 	}
 
 	start := make(chan struct{})
@@ -254,17 +256,23 @@ func TestStressHotContentionEvictionCycles(t *testing.T) {
 			defer workers.Done()
 			<-start
 			for cycle := range cycles {
-				value := byte(cycle + worker)
+				// Every value is unique per coordinate and still fits the
+				// eight-bit blocks, so an observation identifies exactly one
+				// write of this worker.
+				value := uint64(cycle + worker + 1)
 				chunk, err := storage.NewChunk(g)
 				if err != nil {
 					results <- fmt.Errorf("worker %d cycle %d: create chunk: %w", worker, cycle, err)
 					return
 				}
-				if err := chunk.Set(geometry.Offset{}, uint64(value)); err != nil {
+				if err := chunk.Set(geometry.Offset{}, value); err != nil {
 					results <- fmt.Errorf("worker %d cycle %d: set value: %w", worker, cycle, err)
 					return
 				}
-				if err := store.WriteChunk(coords[worker], chunk); err != nil {
+				err = expected[worker].write(value, func() error {
+					return store.WriteChunk(coords[worker], chunk)
+				})
+				if err != nil {
 					results <- fmt.Errorf("worker %d cycle %d: write chunk: %w", worker, cycle, err)
 					return
 				}
@@ -272,10 +280,34 @@ func TestStressHotContentionEvictionCycles(t *testing.T) {
 				// Sweep the shared working set so every cycle reloads chunks
 				// that other workers have displaced from the small cache.
 				for offset := range workerCount {
-					coord := coords[(worker+offset)%workerCount]
-					if _, err := store.ReadChunk(coord); err != nil {
+					owner := (worker + offset) % workerCount
+					coord := coords[owner]
+					window := expected[owner].beginRead()
+					chunk, err := store.ReadChunk(coord)
+					if err != nil {
 						results <- fmt.Errorf(
 							"worker %d cycle %d: read chunk %v: %w",
+							worker,
+							cycle,
+							coord,
+							err,
+						)
+						return
+					}
+					value, err := chunk.Get(geometry.Offset{})
+					if err != nil {
+						results <- fmt.Errorf(
+							"worker %d cycle %d: read value of chunk %v: %w",
+							worker,
+							cycle,
+							coord,
+							err,
+						)
+						return
+					}
+					if err := expected[owner].observe(value, window); err != nil {
+						results <- fmt.Errorf(
+							"worker %d cycle %d: chunk %v: %w",
 							worker,
 							cycle,
 							coord,
@@ -307,11 +339,214 @@ func TestStressHotContentionEvictionCycles(t *testing.T) {
 		if err != nil {
 			t.Fatalf("final chunk %v value: %v", coord, err)
 		}
-		want := uint64(byte(cycles - 1 + worker))
+		want := uint64(cycles + worker)
 		if value != want {
 			t.Fatalf("final chunk %v value = %d, want %d", coord, value, want)
 		}
 	}
+}
+
+func TestStressSharedCoordExpectedState(t *testing.T) {
+	t.Parallel()
+
+	const (
+		writerCount  = 4
+		readerCount  = 4
+		iterations   = 150
+		initialValue = 1
+	)
+	g := mustGeometry(t, geometry.Config{ChunkEdge: 1, LargeChunkEdge: 2, BlockBits: 16})
+	store := mustOpenWithOptions(t, t.TempDir(), g, Options{MaxLoadedChunks: 1})
+	coord := geometry.Coord{X: 6, Y: -9}
+	initial := mustChunk(t, g)
+	if err := initial.Set(geometry.Offset{}, initialValue); err != nil {
+		t.Fatalf("set initial value: %v", err)
+	}
+	if err := store.WriteChunk(coord, initial); err != nil {
+		t.Fatalf("initialize chunk %v: %v", coord, err)
+	}
+	expected := newExpectedState(initialValue)
+
+	start := make(chan struct{})
+	results := make(chan error, writerCount+readerCount)
+	var workers sync.WaitGroup
+	workers.Add(writerCount + readerCount)
+
+	for writer := range writerCount {
+		go func(writer int) {
+			defer workers.Done()
+			<-start
+			for iteration := range iterations {
+				// Distinct values keep every observation attributable to a
+				// single write, even though all writers share the coordinate.
+				value := uint64(initialValue + 1 + writer*iterations + iteration)
+				chunk, err := storage.NewChunk(g)
+				if err != nil {
+					results <- fmt.Errorf("writer %d iteration %d: create chunk: %w", writer, iteration, err)
+					return
+				}
+				if err := chunk.Set(geometry.Offset{}, value); err != nil {
+					results <- fmt.Errorf("writer %d iteration %d: set value: %w", writer, iteration, err)
+					return
+				}
+				err = expected.write(value, func() error {
+					return store.WriteChunk(coord, chunk)
+				})
+				if err != nil {
+					results <- fmt.Errorf("writer %d iteration %d: write chunk: %w", writer, iteration, err)
+					return
+				}
+			}
+			results <- nil
+		}(writer)
+	}
+	for reader := range readerCount {
+		go func(reader int) {
+			defer workers.Done()
+			<-start
+			for iteration := range iterations {
+				window := expected.beginRead()
+				chunk, err := store.ReadChunk(coord)
+				if err != nil {
+					results <- fmt.Errorf("reader %d iteration %d: read chunk: %w", reader, iteration, err)
+					return
+				}
+				value, err := chunk.Get(geometry.Offset{})
+				if err != nil {
+					results <- fmt.Errorf("reader %d iteration %d: read value: %w", reader, iteration, err)
+					return
+				}
+				if err := expected.observe(value, window); err != nil {
+					results <- fmt.Errorf("reader %d iteration %d: %w", reader, iteration, err)
+					return
+				}
+			}
+			results <- nil
+		}(reader)
+	}
+
+	close(start)
+	workers.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	chunk, err := store.ReadChunk(coord)
+	if err != nil {
+		t.Fatalf("final ReadChunk(%v): %v", coord, err)
+	}
+	value, err := chunk.Get(geometry.Offset{})
+	if err != nil {
+		t.Fatalf("final chunk %v value: %v", coord, err)
+	}
+	if err := expected.observe(value, expected.beginRead()); err != nil {
+		t.Fatalf("final chunk %v: %v", coord, err)
+	}
+}
+
+// expectedState tracks the chunk values a concurrent reader is allowed to
+// observe for one coordinate. Ordering is the whole point. A value becomes
+// visible to readers while WriteChunk is still running, so it is published as in
+// flight before the write starts, and it is recorded as committed inside the
+// same critical section that performed the write, so the recorded order matches
+// the order the store accepted the writes. Recording a commit after releasing
+// that section lets two writers append in the opposite order, which makes the
+// tracker report healthy reads as stale and turns the stress suite into a coin
+// flip.
+type expectedState struct {
+	order     sync.Mutex
+	mu        sync.Mutex
+	pending   map[uint64]int
+	committed []uint64
+}
+
+func newExpectedState(initial uint64) *expectedState {
+	return &expectedState{
+		pending:   make(map[uint64]int),
+		committed: []uint64{initial},
+	}
+}
+
+// write publishes value, runs the write, and records the outcome without ever
+// leaving the tracker's write order.
+func (e *expectedState) write(value uint64, apply func() error) error {
+	e.order.Lock()
+	defer e.order.Unlock()
+
+	e.beginWrite(value)
+	if err := apply(); err != nil {
+		e.retire(value, false)
+		return err
+	}
+	e.retire(value, true)
+	return nil
+}
+
+// beginWrite publishes a value as observable before the write reaches the store.
+func (e *expectedState) beginWrite(value uint64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.pending[value]++
+}
+
+// retire drops a value from the in-flight set, appending it to the committed
+// history when the write succeeded.
+func (e *expectedState) retire(value uint64, committed bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.retirePending(value)
+	if committed {
+		e.committed = append(e.committed, value)
+	}
+}
+
+func (e *expectedState) retirePending(value uint64) {
+	if e.pending[value] <= 1 {
+		delete(e.pending, value)
+		return
+	}
+	e.pending[value]--
+}
+
+// beginRead snapshots how many writes had already committed, opening the window
+// an observation is later checked against.
+func (e *expectedState) beginRead() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	return len(e.committed)
+}
+
+// observe reports whether value could be produced by a read that started when
+// committed writes numbered window. The write committed right before the window
+// opened is still visible, as is anything committed since, plus every write that
+// is in flight when the observation is checked. Reading an older committed value
+// means the store lost a write that was already durable when the read started.
+func (e *expectedState) observe(value uint64, window int) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.pending[value] > 0 {
+		return nil
+	}
+	first := max(window-1, 0)
+	visible := e.committed[first:]
+	for _, candidate := range visible {
+		if candidate == value {
+			return nil
+		}
+	}
+	return fmt.Errorf(
+		"value = %d, want a value visible during the read (in flight %v, committed %v)",
+		value,
+		e.pending,
+		visible,
+	)
 }
 
 func TestStoreWALReopenDurabilityModes(t *testing.T) {
