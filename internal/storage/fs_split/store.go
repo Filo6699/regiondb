@@ -451,8 +451,11 @@ func writeAtomic(
 		return err
 	}
 	if syncData {
-		if err := syncParentDirectory(filepath.Dir(path)); err != nil {
-			return fmt.Errorf("sync parent directory: %w", err)
+		if err := commitDirectoryEntry(
+			syncParentDirectory(filepath.Dir(path)),
+			replaceCommitsDirectoryEntry,
+		); err != nil {
+			return err
 		}
 		if err := runAtomicWriteFailpoint(failpoint, atomicWriteDirectorySynced); err != nil {
 			return err
