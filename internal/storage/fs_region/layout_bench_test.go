@@ -1,3 +1,5 @@
+//go:build regiondb_experimental
+
 package fs_region
 
 import (
@@ -17,7 +19,7 @@ const benchmarkWorkingSetChunks = 1024
 // region layout and the production split layout, so both sides of the A/B
 // comparison are measured by one runner:
 //
-//	go test -run '^$' -bench BenchmarkLayout ./internal/storage/fs_region
+//	go test -tags=regiondb_experimental -run '^$' -bench BenchmarkLayout ./internal/storage/fs_region
 //
 // The numbers characterize one machine and configuration. They are not a
 // throughput guarantee and no gate depends on them.
