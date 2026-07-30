@@ -42,6 +42,9 @@ func (s *Store) appendWAL(record []byte) error {
 	return nil
 }
 
+// syncWAL flushes the append handle the store keeps open for the whole session.
+// os.File.Sync maps to FlushFileBuffers on Windows, which reports the write
+// handle as durable without closing it, so the handle stays usable afterwards.
 func (s *Store) syncWAL() error {
 	if err := s.wal.Sync(); err != nil {
 		return fmt.Errorf("sync WAL: %w", err)
