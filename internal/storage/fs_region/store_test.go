@@ -36,6 +36,7 @@ func TestStoreReopenRoundTrip(t *testing.T) {
 	closeStore(t, store)
 
 	reopened := mustOpen(t, root, g)
+	defer closeStore(t, reopened)
 	gotChunk, err := reopened.ReadChunk(coord)
 	if err != nil {
 		t.Fatalf("ReadChunk(): %v", err)
@@ -335,6 +336,14 @@ func mustOpen(t testing.TB, root string, g geometry.Geometry) *Store {
 	if err != nil {
 		t.Fatalf("Open(%q): %v", root, err)
 	}
+	// Close is idempotent, so this backstop keeps a test that forgets a store from
+	// holding a region image open. Windows refuses to remove the temporary
+	// directory while any image handle is still open.
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close(): %v", err)
+		}
+	})
 	return store
 }
 
