@@ -73,7 +73,19 @@ func Open(root string, g geometry.Geometry) (*Store, error) {
 	return OpenWithOptions(root, g, Options{})
 }
 
-func OpenWithOptions(root string, g geometry.Geometry, options Options) (_ *Store, returnErr error) {
+func OpenWithOptions(root string, g geometry.Geometry, options Options) (*Store, error) {
+	return openStore(root, g, options, acquireWriterLock)
+}
+
+// openStore takes writer-lock acquisition as a parameter so a deterministic test
+// can own a data directory without the background heartbeat rewriting ownership
+// metadata underneath its assertions. Production callers pass acquireWriterLock.
+func openStore(
+	root string,
+	g geometry.Geometry,
+	options Options,
+	acquireLock func(path string) (*writerLock, error),
+) (_ *Store, returnErr error) {
 	if root == "" {
 		return nil, errors.New("data directory must not be empty")
 	}
@@ -107,7 +119,7 @@ func OpenWithOptions(root string, g geometry.Geometry, options Options) (_ *Stor
 	if err := os.MkdirAll(absoluteRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create data directory: %w", err)
 	}
-	lock, err := acquireWriterLock(filepath.Join(absoluteRoot, lockName))
+	lock, err := acquireLock(filepath.Join(absoluteRoot, lockName))
 	if err != nil {
 		return nil, fmt.Errorf("open fs_split_v1: %w", err)
 	}
