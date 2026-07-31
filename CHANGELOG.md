@@ -2,7 +2,7 @@
 
 All notable changes to regiondb are documented in this file.
 
-## [Unreleased]
+## [1.1.0] - 2026-07-31
 
 ### Added
 
@@ -33,6 +33,16 @@ All notable changes to regiondb are documented in this file.
   checkpoint collection removes empty chunk images while retaining their
   versions.
 
+### Security
+
+- No default token ships in any artifact or image; an auth-enabled server
+  refuses to start with an empty token, the Compose sample requires
+  `REGIONDB_TOKEN` and binds loopback by default, and token source precedence
+  is logged without the value.
+- Intent paths are validated for grammar and containment, slot writes are
+  bounds-checked before mutation, and temporary files are created
+  exclusive/no-follow where the platform supports it.
+
 ### Compatibility and limitations
 
 - Existing `RGDBSPL1`, `RGDBSPL2`, `RGDBWAL1`, and `RGDBWAL2` data remains
@@ -50,6 +60,17 @@ All notable changes to regiondb are documented in this file.
   intentional state from accidental image loss.
 - `fs_region_v1` remains experimental, opt-in, unavailable to the server and
   verifier, and outside durability, migration, and compatibility guarantees.
+
+### Validation
+
+- Release gate: `gofmt`, `go vet`, `golangci-lint`, race, security and
+  hardened suites, integration, crash/recovery, repeated stress, plus
+  archives, SHA-256 checksums, and SBOMs for Linux, macOS, and Windows on
+  `amd64` and `arm64`.
+
+### Release status
+
+- Stable channel, marked `latest`.
 
 ## [1.0.0] - 2026-06-25
 

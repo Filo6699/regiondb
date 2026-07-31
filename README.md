@@ -8,15 +8,15 @@ format and an authenticated text protocol over TCP or TLS.
 
 ## Install
 
-Download a `v1.0.0` archive for Linux, macOS, or Windows from the
-[GitHub release](https://github.com/Filo6699/regiondb/releases/tag/v1.0.0),
-verify it against `checksums.txt`, and place the `regiondb` binary on your
+Download a `v1.1.0` archive for Linux, macOS, or Windows from the
+[GitHub release](https://github.com/Filo6699/regiondb/releases/tag/v1.1.0),
+verify it against `SHA256SUMS`, and place the `regiondb` binary on your
 `PATH`.
 
 To build the stable source instead:
 
 ```sh
-go install github.com/Filo6699/regiondb/cmd/regiondb@v1.0.0
+go install github.com/Filo6699/regiondb/cmd/regiondb@v1.1.0
 ```
 
 ## Quick start
@@ -87,9 +87,9 @@ The current contracts are documented in:
 - [Scenario benchmarks](docs/BENCHMARKS.md)
 - [Docker](docs/DOCKER.md)
 - [Windows guide](docs/WINDOWS.md)
-- [Release notes](docs/releases/v1.0.0.md)
+- [Release notes](docs/releases/v1.1.0.md)
 
-`v1.0.0` is the stable release line. Its declared on-disk readability, wire
+`v1.1.0` is the current stable release. Its declared on-disk readability, wire
 protocol, durability, and CLI surfaces follow SemVer. The v1.1 contract adds
 bounded world reads, persisted chunk versions and conditional commits, an
 explicit global durability barrier, compressed checkpoint images, bounded
